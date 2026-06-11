@@ -1,0 +1,181 @@
+"""Count-market engine: corners, cards, shots, offsides, tackles, fouls (team)
+and shots/SOT/tackles/fouls/passes/saves (player).
+
+Mirrors the frontend engine. Counts are overdispersed, so the default is a
+negative binomial (variance = mu + mu^2/r); r=None gives Poisson.
+
+The expected counts themselves come from rate data (per-game team rates,
+per-90 player rates) fetched by the data layer — this module turns those
+expectations into priced markets.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Optional
+
+# default dispersion (r) by metric — smaller = fatter tail
+DISP = {"corners": 10, "cards": 5, "shots": 15, "sot": 8, "offsides": 4,
+        "tackles": 20, "fouls": 25, "passes": 25, "saves": 6}
+
+
+def count_dist(mu: float, r: Optional[float] = None, max_k: int = 80) -> list[float]:
+    out = [0.0] * (max_k + 1)
+    if r is None:
+        for k in range(max_k + 1):
+            out[k] = math.exp(-mu) * mu ** k / math.factorial(k)
+    else:
+        p = r / (r + mu)
+        out[0] = p ** r
+        for k in range(1, max_k + 1):
+            out[k] = out[k - 1] * (k + r - 1) * (1 - p) / k
+    s = sum(out) or 1.0
+    return [x / s for x in out]
+
+
+def over(dist: list[float], line: float) -> float:
+    return sum(dist[k] for k in range(math.floor(line) + 1, len(dist)))
+
+
+def at_least(dist: list[float], n: int) -> float:
+    return sum(dist[k] for k in range(n, len(dist)))
+
+
+def team_most(dist_h: list[float], dist_a: list[float]) -> dict:
+    home = tie = 0.0
+    for i, ph in enumerate(dist_h):
+        for j, pa in enumerate(dist_a):
+            if i > j:
+                home += ph * pa
+            elif i == j:
+                tie += ph * pa
+    return {"home": home, "away": 1 - home - tie, "tie": tie}
+
+
+def _fair(outcomes: list[tuple[str, float]]) -> list[dict]:
+    return [{"label": lbl, "prob": round(p, 4), "fair": round(1 / p, 2) if p > 0 else None} for lbl, p in outcomes]
+
+
+def team_markets(rates: dict) -> dict:
+    """rates = {"home": {corners, cards, shots, sot, offsides, tackles, fouls, redProb}, "away": {...}}."""
+    h, a = rates["home"], rates["away"]
+    out: dict[str, list[dict]] = {}
+
+    def ou(metric, lines, label):
+        d = count_dist(h[metric] + a[metric], DISP[metric])
+        for l in lines:
+            o = over(d, l)
+            out[f"{label} O/U {l}"] = _fair([(f"Over {l}", o), (f"Under {l}", 1 - o)])
+
+    def most(metric, label):
+        m = team_most(count_dist(h[metric], DISP[metric]), count_dist(a[metric], DISP[metric]))
+        out[f"{label} — team with most"] = _fair([("Home", m["home"]), ("Away", m["away"]), ("Tie", m["tie"])])
+
+    ou("corners", [8.5, 9.5, 10.5, 11.5], "Corners"); most("corners", "Corners")
+    ou("cards", [2.5, 3.5, 4.5], "Cards"); most("cards", "Cards")
+    dhc, dac = count_dist(h["cards"], DISP["cards"]), count_dist(a["cards"], DISP["cards"])
+    both = (1 - dhc[0]) * (1 - dac[0])
+    out["Both teams to be carded"] = _fair([("Yes", both), ("No", 1 - both)])
+    red = 1 - (1 - h.get("redProb", 0.05)) * (1 - a.get("redProb", 0.05))
+    out["Red card in match"] = _fair([("Yes", red), ("No", 1 - red)])
+    ou("shots", [21.5, 23.5, 25.5], "Total shots")
+    ou("sot", [7.5, 8.5, 9.5], "Shots on target")
+    ou("offsides", [2.5, 3.5, 4.5], "Offsides")
+    ou("tackles", [15.5, 17.5], "Tackles")
+    ou("fouls", [20.5, 22.5, 24.5], "Fouls")
+    return out
+
+
+def player_markets(exp: dict) -> dict:
+    """exp = expected per-match counts: {shots, sot, goals, assists, tackles,
+    fouls, fouled, passes, saves, card_prob, is_gk}."""
+    out: dict[str, list[dict]] = {}
+    mk = lambda label, p: out.__setitem__(label, _fair([(label, max(0.002, min(0.998, p)))]))
+
+    if exp.get("is_gk"):
+        ds = count_dist(exp.get("saves", 0), DISP["saves"])
+        for n in (2, 3, 4):
+            mk(f"Saves {n}+", at_least(ds, n))
+        mk("To be booked", exp.get("card_prob", 0.1))
+        return out
+
+    g, asst = exp.get("goals", 0), exp.get("assists", 0)
+    mk("Anytime goalscorer", 1 - math.exp(-g))
+    mk("To score or assist", 1 - math.exp(-(g + asst)))
+    dsh = count_dist(exp.get("shots", 0), DISP["shots"])
+    mk("Shots 1+", at_least(dsh, 1)); mk("Shots 2+", at_least(dsh, 2))
+    dso = count_dist(exp.get("sot", 0), DISP["sot"])
+    mk("Shots on target 1+", at_least(dso, 1)); mk("Shots on target 2+", at_least(dso, 2))
+    mk("Tackles 2+", at_least(count_dist(exp.get("tackles", 0), DISP["tackles"]), 2))
+    mk("Fouls committed 1+", at_least(count_dist(exp.get("fouls", 0), DISP["fouls"]), 1))
+    pl = max(4.5, round(exp.get("passes", 0) / 5) * 5 - 0.5)
+    mk(f"Passes over {pl}", over(count_dist(exp.get("passes", 0), DISP["passes"]), pl))
+    mk("To be fouled 1+", at_least(count_dist(exp.get("fouled", 0), 10), 1))
+    mk("To be booked", exp.get("card_prob", 0.1))
+    return out
+
+
+# role count baselines (per 90) — mirror the frontend ROLE table
+ROLE_COUNTS = {
+    "ST": {"passes": 22, "tackles": 0.4, "fouls": 1.0, "fouled": 1.3, "saves": 0},
+    "SS": {"passes": 28, "tackles": 0.6, "fouls": 1.0, "fouled": 1.2, "saves": 0},
+    "W": {"passes": 28, "tackles": 0.8, "fouls": 0.9, "fouled": 1.4, "saves": 0},
+    "CAM": {"passes": 38, "tackles": 1.0, "fouls": 1.0, "fouled": 1.5, "saves": 0},
+    "CM": {"passes": 55, "tackles": 1.8, "fouls": 1.2, "fouled": 1.1, "saves": 0},
+    "DM": {"passes": 60, "tackles": 2.5, "fouls": 1.6, "fouled": 0.9, "saves": 0},
+    "FB": {"passes": 45, "tackles": 2.0, "fouls": 1.1, "fouled": 0.8, "saves": 0},
+    "CB": {"passes": 50, "tackles": 1.4, "fouls": 0.9, "fouled": 0.5, "saves": 0},
+    "GK": {"passes": 30, "tackles": 0.1, "fouls": 0.1, "fouled": 0.2, "saves": 3.0},
+}
+_BASE_G = 1.35
+
+
+def _clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: float,
+                        opp_xg: float, set_pieces: Optional[dict] = None,
+                        country_weight: float = 0.6) -> dict:
+    """Expected per-match counts with opponent-strength and set-piece adjustments.
+
+    Attacking output scales with the team's xG (opponent defence is baked into
+    team_xg); defensive/discipline output scales with opponent attack (opp_xg).
+    """
+    attack = _clamp(team_xg / _BASE_G, 0.6, 1.7)
+    defend = _clamp(opp_xg / _BASE_G, 0.6, 1.7)
+    sp = set_pieces or {}
+    club, country = profile.get("club", {}), profile.get("country", {})
+
+    def blend(metric, default=0.0):
+        c = club.get(metric, default)
+        n = country.get(metric, default) if country else c
+        return country_weight * n + (1 - country_weight) * c
+
+    rc = ROLE_COUNTS.get(pos, ROLE_COUNTS["CM"])
+    exp = {
+        "goals": blend("goals") * start_prob * attack,
+        "sot": blend("sot") * start_prob * attack,
+        "shots": blend("shots") * start_prob * attack,
+        "assists": blend("assists") * start_prob * attack,
+        "passes": rc["passes"] * start_prob * math.sqrt(attack),
+        "tackles": rc["tackles"] * start_prob * defend,
+        "fouls": rc["fouls"] * start_prob * defend,
+        "fouled": rc["fouled"] * start_prob * attack,
+        "card_prob": blend("cards", 0.1) * defend * start_prob,
+        "is_gk": pos == "GK",
+    }
+    if pos == "GK":
+        exp["saves"] = (blend("saves") if club.get("saves") is not None else rc["saves"]) * start_prob
+
+    if sp.get("pen"):
+        p_pen = _clamp(0.18 * attack, 0.05, 0.4) * start_prob
+        exp["goals"] += p_pen * 0.76
+        exp["sot"] += p_pen
+        exp["shots"] += p_pen
+    if sp.get("fk"):
+        exp["shots"] += 0.4 * start_prob
+        exp["sot"] += 0.15 * start_prob
+        exp["goals"] += 0.03 * start_prob
+        exp["assists"] += 0.06 * start_prob
+    return exp

@@ -1,0 +1,109 @@
+"""HTTP service that makes the betting tool persistent and deployable.
+
+Endpoints
+  GET  /api/feed                 -> latest feed.json (built by the feed job)
+  POST /api/bets                 -> log a bet  {match_id, market, selection, model_prob, price, stake, bankroll?}
+  GET  /api/bets                 -> all bets
+  POST /api/bets/<id>/settle     -> manual settle {result, closing_price?}
+  POST /api/settle/auto          -> auto-settle finished fixtures + capture CLV
+  GET  /api/performance          -> profitability AND hit rate, calibration, segments
+
+Persistence is the SQLite ledger (mount the .db on a volume). The React app's
+"Log bet" button POSTs to /api/bets instead of holding bets in memory.
+"""
+
+from __future__ import annotations
+
+import os
+
+from flask import Flask, jsonify, request, send_file
+
+from .betlog import Ledger, performance, fit_calibrator, segment_stats, calibration_table
+
+
+def create_app(db_path: str = "bets.db", feed_path: str = "feed.json") -> Flask:
+    app = Flask(__name__)
+    ledger = Ledger(db_path)
+
+    @app.get("/api/health")
+    def health():
+        return jsonify({"ok": True})
+
+    @app.get("/api/feed")
+    def feed():
+        if os.path.exists(feed_path):
+            return send_file(os.path.abspath(feed_path), mimetype="application/json")
+        return jsonify([])
+
+    @app.post("/api/bets")
+    def log_bet():
+        d = request.get_json(force=True)
+        bid = ledger.record(
+            match_id=str(d["match_id"]),
+            market=d["market"],
+            selection=d["selection"],
+            model_prob=float(d["model_prob"]),
+            price=float(d["price"]),
+            stake=float(d["stake"]),
+            bankroll=float(d.get("bankroll", 100)),
+        )
+        return jsonify({"id": bid}), 201
+
+    @app.get("/api/bets")
+    def list_bets():
+        return jsonify(ledger.all())
+
+    @app.post("/api/bets/<bid>/settle")
+    def settle_bet(bid):
+        d = request.get_json(force=True) or {}
+        ledger.settle(bid, d["result"], d.get("closing_price"))
+        return jsonify({"ok": True})
+
+    @app.post("/api/settle/auto")
+    def settle_auto():
+        key = os.environ.get("API_FOOTBALL_KEY")
+        if not key:
+            return jsonify({"error": "API_FOOTBALL_KEY not set"}), 400
+        from .providers import ApiFootballProvider, FileCache
+        from .settler import Settler, ApiFootballResults
+
+        results = ApiFootballResults(ApiFootballProvider(key, cache=FileCache()))
+        out = Settler(ledger, results).settle_open()
+        return jsonify(out)
+
+    @app.get("/api/performance")
+    def perf():
+        settled = ledger.settled()
+        m = performance(settled)
+        cal = fit_calibrator(settled)
+        return jsonify({
+            # profitability is reported first and on equal footing with hit rate
+            "profitability": {
+                "pnl": m.get("pnl"),
+                "roi": m.get("roi"),
+                "staked": m.get("staked"),
+                "avg_clv": m.get("avg_clv"),
+                "pct_positive_clv": m.get("pct_positive_clv"),
+            },
+            "hit_rate": m.get("hit_rate"),
+            "n": m.get("n"),
+            "brier": m.get("brier"),
+            "log_loss": m.get("log_loss"),
+            "calibration_active": cal.active,
+            "calibration_table": calibration_table(settled),
+            "segments": segment_stats(settled),
+            "open": len(ledger.open_bets()),
+        })
+
+    return app
+
+
+# `flask --app datalayer.service run`  /  gunicorn 'datalayer.service:app'
+app = create_app(
+    db_path=os.environ.get("LEDGER_DB", "bets.db"),
+    feed_path=os.environ.get("FEED_PATH", "feed.json"),
+)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

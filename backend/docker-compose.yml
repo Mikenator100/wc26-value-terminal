@@ -1,0 +1,25 @@
+services:
+  api:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
+      - ODDS_API_KEY=${ODDS_API_KEY}
+      - LEDGER_DB=/data/bets.db
+      - FEED_PATH=/data/feed.json
+    volumes:
+      - ledger:/data        # SQLite ledger + feed persist here
+  # rebuilds the feed (stats + odds + lineups) on a schedule, and auto-settles
+  feedjob:
+    build: .
+    environment:
+      - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
+      - ODDS_API_KEY=${ODDS_API_KEY}
+    volumes:
+      - ledger:/data
+    entrypoint: ["sh", "-c", "while true; do \
+        python -m datalayer.build --key $$API_FOOTBALL_KEY --odds-key $$ODDS_API_KEY --out /data/feed.json; \
+        curl -s -X POST http://api:8000/api/settle/auto || true; \
+        sleep 600; done"]
+volumes:
+  ledger:

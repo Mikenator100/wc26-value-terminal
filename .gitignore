@@ -1,0 +1,20 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# data layer artifacts
+.cache/
+*.db
+feed.json
+backend/feed.json
+backend/*.db
+
+# node / frontend
+node_modules/
+dist/
+
+# env
+.env
+*.local

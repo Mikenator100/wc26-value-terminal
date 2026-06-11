@@ -1,0 +1,5 @@
+requests>=2.31
+flask>=3.0
+# optional: enrichment + predicted-lineup scraping:
+#   pip install soccerdata pandas
+#   pip install soccerdata pandas beautifulsoup4
