@@ -153,20 +153,31 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         return country_weight * n + (1 - country_weight) * c
 
     rc = ROLE_COUNTS.get(pos, ROLE_COUNTS["CM"])
+
+    # measured per-90 count rates when the feed carries them (None = the
+    # source didn't record the metric); role baselines otherwise
+    def measured(metric):
+        c, n = club.get(metric), country.get(metric) if country else None
+        if c is None and n is None:
+            return rc[metric]
+        c = c if c is not None else n
+        n = n if n is not None else c
+        return country_weight * n + (1 - country_weight) * c
+
     exp = {
         "goals": blend("goals") * start_prob * attack,
         "sot": blend("sot") * start_prob * attack,
         "shots": blend("shots") * start_prob * attack,
         "assists": blend("assists") * start_prob * attack,
-        "passes": rc["passes"] * start_prob * math.sqrt(attack),
-        "tackles": rc["tackles"] * start_prob * defend,
-        "fouls": rc["fouls"] * start_prob * defend,
-        "fouled": rc["fouled"] * start_prob * attack,
+        "passes": measured("passes") * start_prob * math.sqrt(attack),
+        "tackles": measured("tackles") * start_prob * defend,
+        "fouls": measured("fouls") * start_prob * defend,
+        "fouled": measured("fouled") * start_prob * attack,
         "card_prob": blend("cards", 0.1) * defend * start_prob,
         "is_gk": pos == "GK",
     }
     if pos == "GK":
-        exp["saves"] = (blend("saves") if club.get("saves") is not None else rc["saves"]) * start_prob
+        exp["saves"] = measured("saves") * start_prob
 
     if sp.get("pen"):
         p_pen = _clamp(0.18 * attack, 0.05, 0.4) * start_prob

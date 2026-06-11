@@ -41,7 +41,10 @@ class TheOddsApiProvider:
         self.cache = cache or FileCache()
         self.requests_remaining: Optional[str] = None
 
-    def events_odds(self, markets: str = "h2h,totals,btts", bookmakers: str = "bet365,pinnacle,betfair_ex_eu") -> list[dict]:
+    # NB: the bulk /odds endpoint rejects btts (422 INVALID_MARKET) — btts is
+    # only served by the per-event endpoint at 1 call per fixture. The shaping
+    # code below still handles btts whenever a payload carries it.
+    def events_odds(self, markets: str = "h2h,totals", bookmakers: str = "bet365,pinnacle,betfair_ex_eu") -> list[dict]:
         params = {
             "apiKey": self.api_key,
             "regions": self.regions,

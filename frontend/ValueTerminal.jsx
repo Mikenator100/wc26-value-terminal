@@ -173,17 +173,25 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   const attackF = clamp((ctx.teamXg ?? BASE_G) / BASE_G, 0.6, 1.7);
   const defenceF = clamp((ctx.oppXg ?? BASE_G) / BASE_G, 0.6, 1.7);
 
+  // measured per-90 count rates when the feed carries them (null/absent =
+  // the source didn't record the metric); role baselines otherwise — keeps
+  // the sample data and thin international samples working unchanged
+  const measured = (metric) => {
+    const c = p.club?.[metric], n = p.country?.[metric];
+    if (c == null && n == null) return ROLE[pos][metric];
+    const cv = c ?? n, nv = n ?? c;
+    return countryWeight * nv + (1 - countryWeight) * cv;
+  };
+
   let expGoals = blend("goals") * startProb * attackF;
   let expSot = blend("sot") * startProb * attackF;
   let expShots = blend("shots") * startProb * attackF;
   let expAssists = blend("assists") * startProb * attackF;
-  const expPasses = ROLE[pos].passes * startProb * Math.sqrt(attackF);
-  const expTackles = ROLE[pos].tackles * startProb * defenceF;
-  const expFouls = ROLE[pos].fouls * startProb * defenceF;
-  const expFouled = ROLE[pos].fouled * startProb * attackF;
-  const expSaves = (p.club?.saves != null
-    ? countryWeight * (p.country.saves ?? p.club.saves) + (1 - countryWeight) * p.club.saves
-    : ROLE[pos].saves) * startProb;
+  const expPasses = measured("passes") * startProb * Math.sqrt(attackF);
+  const expTackles = measured("tackles") * startProb * defenceF;
+  const expFouls = measured("fouls") * startProb * defenceF;
+  const expFouled = measured("fouled") * startProb * attackF;
+  const expSaves = measured("saves") * startProb;
   const cardFactor = Math.sqrt(ROLE[pos].cards / ROLE[p.clubRole].cards);
   let cardP =
     (countryWeight * p.country.cards + (1 - countryWeight) * p.club.cards) *

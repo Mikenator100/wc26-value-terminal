@@ -89,7 +89,8 @@ def infer_role(position: Optional[str], grid: Optional[str], stats: dict) -> str
 
 def _aggregate(stats_blocks: list[dict]) -> dict:
     """Sum raw counts + minutes across several (team,season) blocks."""
-    tot = {"minutes": 0, "shots": 0, "sot": 0, "goals": 0, "assists": 0, "yellow": 0, "apps": 0}
+    tot = {"minutes": 0, "shots": 0, "sot": 0, "goals": 0, "assists": 0, "yellow": 0, "apps": 0,
+           "tackles": 0, "fouls": 0, "fouled": 0, "passes": 0, "saves": 0}
     for s in stats_blocks:
         tot["minutes"] += _safe(s, "games", "minutes")
         tot["apps"] += _safe(s, "games", "appearences")
@@ -98,17 +99,34 @@ def _aggregate(stats_blocks: list[dict]) -> dict:
         tot["goals"] += _safe(s, "goals", "total")
         tot["assists"] += _safe(s, "goals", "assists")
         tot["yellow"] += _safe(s, "cards", "yellow")
+        tot["tackles"] += _safe(s, "tackles", "total")
+        tot["fouls"] += _safe(s, "fouls", "committed")
+        tot["fouled"] += _safe(s, "fouls", "drawn")
+        tot["passes"] += _safe(s, "passes", "total")
+        tot["saves"] += _safe(s, "goals", "saves")
     return tot
 
 
 def _rates(agg: dict) -> dict:
     m = agg["minutes"]
+
+    # count metrics where a raw total of 0 over real minutes means "not
+    # recorded by the source", not a true zero — leave them None so the
+    # pricing layer falls back to role baselines
+    def opt90(count):
+        return round(per90(count, m), 3) if count else None
+
     return {
         "shots": round(per90(agg["shots"], m), 3),
         "sot": round(per90(agg["sot"], m), 3),
         "goals": round(per90(agg["goals"], m), 3),
         "assists": round(per90(agg["assists"], m), 3),
         "cards": round(card_probability(agg["yellow"], m), 3),
+        "tackles": opt90(agg["tackles"]),
+        "fouls": opt90(agg["fouls"]),
+        "fouled": opt90(agg["fouled"]),
+        "passes": opt90(agg["passes"]),
+        "saves": opt90(agg["saves"]),
         "minutes": m,  # carried for confidence weighting / display
     }
 
@@ -165,8 +183,10 @@ def build_player_profile(
         "confirmedPos": pos,        # overwritten by build when a confirmed XI lands
         "startProb": round(predicted_start_prob, 2),
         "confirmedIn": False,       # flipped true when seen in confirmed lineup
-        "club": {k: club_rates[k] for k in ("shots", "sot", "goals", "assists", "cards")},
-        "country": {k: country_rates[k] for k in ("shots", "sot", "goals", "assists", "cards")},
+        "club": {k: club_rates[k] for k in ("shots", "sot", "goals", "assists", "cards",
+                                            "tackles", "fouls", "fouled", "passes", "saves")},
+        "country": {k: country_rates[k] for k in ("shots", "sot", "goals", "assists", "cards",
+                                                  "tackles", "fouls", "fouled", "passes", "saves")},
         "_minutes": {"club": club_agg["minutes"], "country": country_agg["minutes"]},
     }
 
@@ -174,12 +194,22 @@ def build_player_profile(
 # --------------------------------------------------------------------------- #
 # expected goals for a fixture -> feeds the terminal's Poisson score matrix
 # --------------------------------------------------------------------------- #
+def _avg_goals(team_stats: dict, side: str) -> float:
+    # season stats can be all-zero strings ("0.0") before a team has played —
+    # treat non-positive as "no data" and fall back to a neutral average
+    try:
+        v = float(_safe(team_stats, "goals", side, "average", "total", default=0) or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return v if v > 0 else 1.3
+
+
 def _avg_goals_for(team_stats: dict) -> float:
-    return float(_safe(team_stats, "goals", "for", "average", "total", default=1.3) or 1.3)
+    return _avg_goals(team_stats, "for")
 
 
 def _avg_goals_against(team_stats: dict) -> float:
-    return float(_safe(team_stats, "goals", "against", "average", "total", default=1.3) or 1.3)
+    return _avg_goals(team_stats, "against")
 
 
 def team_lambdas(

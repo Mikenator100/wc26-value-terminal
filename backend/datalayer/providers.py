@@ -55,6 +55,8 @@ class Provider(Protocol):
     def player_seasons(self, player_id: int, seasons: list[int]) -> list[dict]: ...
     def team_players(self, team: int, season: int) -> list[dict]: ...
     def predictions(self, fixture_id: int) -> Optional[dict]: ...
+    def team_recent_fixtures(self, team: int, last: int = 5) -> list[dict]: ...
+    def fixture_statistics(self, fixture_id: int) -> list[dict]: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +165,15 @@ class ApiFootballProvider:
     def predictions(self, fixture_id: int) -> Optional[dict]:
         res = self._get("predictions", {"fixture": fixture_id}, ttl=3600)
         return res[0] if res else None
+
+    def team_recent_fixtures(self, team: int, last: int = 5) -> list[dict]:
+        """A team's most recent fixtures across all competitions (form window)."""
+        return self._get("fixtures", {"team": team, "last": last}, ttl=21600)
+
+    def fixture_statistics(self, fixture_id: int) -> list[dict]:
+        # match-level counts (corners, shots, fouls, cards) per team; finished
+        # matches never change, so cache for a month
+        return self._get("fixtures/statistics", {"fixture": fixture_id}, ttl=30 * 86400)
 
     def fixture(self, fixture_id: int) -> Optional[dict]:
         res = self._get("fixtures", {"id": fixture_id}, ttl=300)

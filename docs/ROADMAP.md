@@ -22,22 +22,25 @@
   capture, profitability reporting; Dockerfile + compose.
 - **Frontend** — two-tab terminal previewing everything on sample data; in-app
   log -> settle -> recalibrate.
+- **Real rate data** — `teamRates` (corners/cards/shots/SOT/offsides/fouls + a
+  bounded tackles estimate) averaged from each team's recent finished fixtures
+  via `fixtures/statistics` (`datalayer/teamrates.py`); player per-90
+  tackles/fouls/fouled/passes/saves aggregated straight from API-Football player
+  blocks into the club/country profiles, with None-means-missing so pricing
+  falls back to role baselines. Both engines (Python + JSX) prefer measured
+  rates. Recent-form goal averages also back-fill xG while the tournament
+  season has nothing to average. Verified live against WC2026 data.
 
 ## Next (in priority order)
 
-1. **Wire real rate data** (the critical path). Pull team per-game rates
-   (corners/cards/shots/SOT/offsides/tackles/fouls) and player per-90 rates
-   (tackles/fouls/passes/saves) from API-Football team stats and FBref (soccerdata),
-   and merge into `teamRates` and player profiles in `build.py`. Engines already
-   consume these; right now they run on sample/role-baseline values.
-2. **Remaining count markets** — throw-ins, free kicks, goal kicks. Same NB engine,
+1. **Remaining count markets** — throw-ins, free kicks, goal kicks. Same NB engine,
    just need the per-game rates.
-3. **Predicted-lineup source** — point `HtmlPredictedLineups` at a real predicted-XI
+2. **Predicted-lineup source** — point `HtmlPredictedLineups` at a real predicted-XI
    site (adapt selectors) or keep the manual `xis.json` path.
-4. **Frontend ↔ backend wiring** — externalise `SAMPLE_MATCHES` to a `feed.json`
+3. **Frontend ↔ backend wiring** — externalise `SAMPLE_MATCHES` to a `feed.json`
    fetch; set `API_BASE` so logging persists; show real `/api/performance` in Track
    record instead of the in-memory mock.
-5. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
+4. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
    move to Postgres if running multi-instance.
 
 ## Backlog / ideas
@@ -53,7 +56,10 @@
 
 ## Known limitations (carry these forward)
 
-- Count-market accuracy is gated on the rate data (item 1 above).
+- Team tackles aren't in `fixtures/statistics`; `teamRates.tackles` is estimated
+  from fouls (~1.4×, bounded 12–21 per game).
+- Form windows early in the tournament are friendlies/qualifiers against mixed
+  opposition — rates and the xG fallback inherit that schedule bias.
 - No referee-specific card adjustment yet (a referee multiplier hook exists in spirit).
 - Opponent strength uses team xG as the single signal; no per-zone or matchup detail.
 - Bet365 prop prices aren't in the aggregator feed the way main markets are — props

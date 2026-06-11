@@ -71,7 +71,10 @@ def test_profile_shape():
     assert set(p) >= {"name", "team", "clubRole", "countryRole", "predictedPos",
                       "confirmedPos", "startProb", "confirmedIn", "club", "country"}
     for ctx in ("club", "country"):
-        assert set(p[ctx]) == {"shots", "sot", "goals", "assists", "cards"}
+        assert set(p[ctx]) == {"shots", "sot", "goals", "assists", "cards",
+                               "tackles", "fouls", "fouled", "passes", "saves"}
+        # blocks without count data carry None, so pricing falls back to role baselines
+        assert p[ctx]["passes"] is None and p[ctx]["saves"] is None
     # club goal rate ~0.76/90, country lower ~0.42/90 — the split is preserved
     assert p["club"]["goals"] > p["country"]["goals"]
     assert p["clubRole"] in ("ST", "SS")

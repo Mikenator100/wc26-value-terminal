@@ -131,14 +131,29 @@ predicted lineups, the betlog (calibration/CLV/segment trust), auto-settlement,
 and the Flask service with persistence. The frontend previews everything on sample
 data. See `docs/ROADMAP.md`.
 
-## The biggest open task
+## Real rate data (done — June 2026)
 
-**Wire real rate data into the count markets and player props.** The pricing
-engines are done and tested, but they currently run on sample team rates and
-role-baseline player rates. Pull team per-game rates (corners/cards/shots) and
-player per-90 rates (tackles/fouls/passes/saves) from API-Football team stats and
-FBref, and merge them into the team/player profiles in `build.py`. Everything
-downstream already consumes these.
+Count markets and player props now run on real rates, verified live against
+WC2026 data:
+
+- **Team rates** (`datalayer/teamrates.py`): per-game corners/cards/shots/SOT/
+  offsides/fouls/redProb averaged from each team's recent finished fixtures via
+  `fixtures/statistics` (the `teams/statistics` endpoint has no corners/shots).
+  Attached to each match as `teamRates` by `build.py`; `--team-form N` controls
+  the window (0 disables — each finished fixture costs 1 API call uncached,
+  cached a month after). Team tackles aren't published; estimated from fouls
+  (~1.4×, bounded 12–21).
+- **Player per-90 counts**: API-Football player blocks already carry tackles/
+  fouls/fouled/passes/saves — `normalize.py` aggregates them into the club and
+  country blocks. A raw count of 0 over real minutes means "not recorded", so it
+  becomes `None` and pricing falls back to role baselines (`measured()` in both
+  `countmarkets.player_expectations` and the JSX `priceProps` — the engines stay
+  in sync).
+- **xG early-tournament fallback**: the WC-season stats average over 0 games at
+  kickoff of the tournament, so `build.py` back-fills goals for/against from the
+  same recent-form window.
+- `--squad-limit` joins `--team-form` as the API-budget levers (each player
+  costs ~4 calls uncached).
 
 ## Constraints & honest caveats (important)
 

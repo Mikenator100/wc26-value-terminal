@@ -21,6 +21,7 @@ from typing import Optional
 
 from .providers import ApiFootballProvider, FileCache, Provider
 from .normalize import build_player_profile, team_lambdas
+from .teamrates import team_rates, form_goal_averages, FINISHED
 
 # seasons to aggregate the country split over (international samples are small)
 COUNTRY_SEASONS = [2023, 2024, 2025, 2026]
@@ -55,6 +56,38 @@ def _confirmed_lineup_index(lineups: list[dict]) -> dict[str, str]:
     return idx
 
 
+def team_count_rates(provider: Provider, team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
+    """Per-game corner/card/shot rates over a team's recent finished fixtures.
+
+    Costs 1 API call per finished fixture uncached; finished-match statistics
+    are cached for a month, so repeat builds are free.
+    """
+    payloads = []
+    for fx in recent_fixtures:
+        status = ((fx.get("fixture") or {}).get("status") or {}).get("short")
+        fid = (fx.get("fixture") or {}).get("id")
+        if status not in FINISHED or not fid:
+            continue
+        try:
+            payloads.append(provider.fixture_statistics(int(fid)))
+        except Exception:
+            continue
+    return team_rates(team_id, payloads)
+
+
+def _games_played(team_stats: dict) -> int:
+    return (((team_stats or {}).get("fixtures") or {}).get("played") or {}).get("total") or 0
+
+
+def _form_stats(team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
+    """Synthesize the goals-average shape team_lambdas reads, from recent form."""
+    fg = form_goal_averages(team_id, recent_fixtures)
+    if not fg:
+        return None
+    return {"goals": {"for": {"average": {"total": fg[0]}},
+                      "against": {"average": {"total": fg[1]}}}}
+
+
 def build_match(
     provider: Provider,
     fixture: dict,
@@ -62,10 +95,22 @@ def build_match(
     season: int,
     squad_limit: int = 8,
     predicted_lineups: Optional[dict] = None,
+    team_form: int = 5,
 ) -> dict:
     """Build one match object. `predicted_lineups` is an optional external feed:
-    {team_name: [{name, pos, startProb}]} from a predicted-XI source."""
+    {team_name: [{name, pos, startProb}]} from a predicted-XI source.
+    `team_form` = recent finished fixtures per team used for count rates
+    (corners/cards/shots); 0 skips those API calls."""
     meta = _fixture_meta(fixture)
+
+    # --- recent form window (shared by count rates + the xG fallback) ---- #
+    recent: dict[str, list[dict]] = {"home": [], "away": []}
+    if team_form:
+        for side, tid in (("home", meta["homeId"]), ("away", meta["awayId"])):
+            try:
+                recent[side] = provider.team_recent_fixtures(tid, last=team_form)
+            except Exception:
+                pass
 
     # --- expected goals -------------------------------------------------- #
     try:
@@ -73,6 +118,12 @@ def build_match(
         as_ = provider.team_statistics(league, season, meta["awayId"])
     except Exception:
         hs = as_ = {}
+    # early in the tournament the league-season stats have nothing to average;
+    # fall back to goals for/against over the recent form window
+    if _games_played(hs) < 3:
+        hs = _form_stats(meta["homeId"], recent["home"]) or hs
+    if _games_played(as_) < 3:
+        as_ = _form_stats(meta["awayId"], recent["away"]) or as_
     preds = None
     try:
         preds = provider.predictions(int(meta["id"]))
@@ -126,13 +177,27 @@ def build_match(
                 profile["confirmedPos"] = profile["predictedPos"]
             players.append(profile)
 
-    return {
+    # --- team count rates (corners / cards / shots ...) ------------------- #
+    rates = None
+    if team_form:
+        try:
+            rh = team_count_rates(provider, meta["homeId"], recent["home"])
+            ra = team_count_rates(provider, meta["awayId"], recent["away"])
+            if rh and ra:
+                rates = {"home": rh, "away": ra}
+        except Exception:
+            pass
+
+    out = {
         **{k: meta[k] for k in ("id", "home", "away", "group", "kickoff", "live")},
         "xgHome": xg_home,
         "xgAway": xg_away,
         "markets": [],  # merged in by the odds adapter
         "players": players,
     }
+    if rates:
+        out["teamRates"] = rates
+    return out
 
 
 def build_feed(
@@ -142,6 +207,8 @@ def build_feed(
     only_upcoming: bool = True,
     max_matches: Optional[int] = None,
     predicted_lineups: Optional[dict] = None,
+    team_form: int = 5,
+    squad_limit: int = 8,
 ) -> list[dict]:
     fixtures = provider.fixtures(league, season)
     if only_upcoming:
@@ -149,7 +216,9 @@ def build_feed(
         fixtures = [f for f in fixtures if (f.get("fixture", {}).get("status", {}) or {}).get("short") in keep]
     if max_matches:
         fixtures = fixtures[:max_matches]
-    return [build_match(provider, f, league, season, predicted_lineups=predicted_lineups) for f in fixtures]
+    return [build_match(provider, f, league, season, squad_limit=squad_limit,
+                        predicted_lineups=predicted_lineups, team_form=team_form)
+            for f in fixtures]
 
 
 def main() -> None:
@@ -161,6 +230,10 @@ def main() -> None:
     ap.add_argument("--league", type=int, default=1)
     ap.add_argument("--season", type=int, default=2026)
     ap.add_argument("--max-matches", type=int, default=None)
+    ap.add_argument("--team-form", type=int, default=5,
+                    help="recent finished fixtures per team for count rates; 0 disables (saves ~12 calls/match uncached)")
+    ap.add_argument("--squad-limit", type=int, default=8,
+                    help="players per team (each costs ~4 API calls uncached)")
     ap.add_argument("--out", default="feed.json")
     args = ap.parse_args()
 
@@ -171,7 +244,9 @@ def main() -> None:
             predicted = ManualLineups(json.load(f)).to_seed_dict()
 
     provider = ApiFootballProvider(args.key, mode=args.mode, cache=FileCache())
-    feed = build_feed(provider, args.league, args.season, max_matches=args.max_matches, predicted_lineups=predicted)
+    feed = build_feed(provider, args.league, args.season, max_matches=args.max_matches,
+                      predicted_lineups=predicted, team_form=args.team_form,
+                      squad_limit=args.squad_limit)
 
     if args.odds_key:
         from .odds import TheOddsApiProvider, merge_odds_into_feed
