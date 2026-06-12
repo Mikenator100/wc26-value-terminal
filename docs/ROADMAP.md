@@ -56,10 +56,30 @@
   serving); the compose file itself hasn't been executed — no Docker on the
   dev machine. Postgres deferred until multi-instance is real.
 
+- **Prop prices from CSV** — hand-collected Bet365 slip CSV
+  (`backend/props/`) attaches real prices to feed players (`--props-csv` /
+  `PROPS_CSV`); initial-aware name matching; the terminal prefills the prop
+  odds inputs so edge shows without pasting. Prop exposure is void-aware
+  (book props void on no-show, so fair prices are conditional on appearing).
+- **Backtesting groundwork** — The Odds API's historical endpoints are paid,
+  so the system records its own history: every jobs cycle appends odds+model
+  snapshots (`snapshots.py`, with the backend's Poisson goals marginals);
+  `python -m datalayer.backtest history.jsonl --key ...` replays them into
+  flat-stake P&L/ROI/CLV per edge bucket once results land. Needs accumulated
+  cycles before it says anything.
+- **Cloud deployment** — single Render web service (`render.yaml` blueprint):
+  Docker image serves terminal + API same-origin, feed scheduler runs
+  in-process (`ENABLE_FEED_JOB`), optional `ACCESS_CODE` basic-auth gate.
+  See `DEPLOY.md` for the push-to-GitHub flow and the free-tier caveats
+  (instance sleeps when idle; SQLite resets on redeploys without a paid disk).
+
 ## Next (in priority order)
 
-1. **Backtesting harness** (promoted from backlog) — historical odds to validate
-   edge before betting live.
+1. **Accumulate snapshot history, then run the backtest** — the evaluator is
+   built; it needs days of recorded cycles across many matches to mean
+   anything.
+2. **Persistent ledger in the cloud** — paid Render disk or Postgres, once the
+   bet history is worth keeping.
 
 ## Backlog / ideas
 

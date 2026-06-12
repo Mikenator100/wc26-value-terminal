@@ -1,0 +1,49 @@
+# Render Blueprint — one web service: the Flask API serving the built terminal
+# at the same origin, with the feed scheduler running in-process (free tier
+# has no background workers).
+#
+# Deploy: push this repo to GitHub, then Render Dashboard -> New + ->
+# Blueprint -> pick the repo. Render reads this file; you only type in the
+# two API keys (and an ACCESS_CODE if you want the friends-only gate).
+#
+# Free-tier truths:
+#   - the instance sleeps after ~15 min idle; first visit takes ~50s to wake
+#   - NO persistent disk: bets.db and the feed reset on every deploy/restart.
+#     To keep the ledger forever, upgrade the plan and uncomment the disk
+#     block — /data then survives deploys.
+
+services:
+  - type: web
+    name: wc26-value-terminal
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: API_FOOTBALL_KEY
+        sync: false              # typed into the dashboard, never in git
+      - key: ODDS_API_KEY
+        sync: false
+      - key: ACCESS_CODE
+        sync: false              # optional: leave empty for a public app
+      - key: ENABLE_FEED_JOB
+        value: "1"
+      - key: FEED_INTERVAL
+        value: "1800"
+      - key: MAX_MATCHES
+        value: "8"               # API-budget guard (free tier ~100 calls/day)
+      - key: TEAM_FORM
+        value: "3"
+      - key: SQUAD_LIMIT
+        value: "8"
+      - key: AUTO_LINEUPS
+        value: "1"
+      - key: PROPS_CSV
+        value: /app/props/bet365_worldcup_master_props.csv
+      - key: CACHE_DIR
+        value: /data/.cache
+#    disk:                       # paid instance only — persistent ledger
+#      name: ledger
+#      mountPath: /data
+#      sizeGB: 1

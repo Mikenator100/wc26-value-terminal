@@ -46,6 +46,9 @@ def run_cycle() -> int:
     key = os.environ["API_FOOTBALL_KEY"]
     odds_key = os.environ.get("ODDS_API_KEY") or os.environ.get("THE_ODDS_API_KEY")
     feed_path = os.environ.get("FEED_PATH", "feed.json")
+    feed_dir = os.path.dirname(feed_path)
+    if feed_dir:
+        os.makedirs(feed_dir, exist_ok=True)
     cache = FileCache(os.environ.get("CACHE_DIR", ".cache"))
 
     provider = ApiFootballProvider(key, cache=cache)

@@ -48,9 +48,11 @@ pip install -r requirements.txt
 
 # build the feed (stats only)
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --league 1 --season 2026 --max-matches 8 --out feed.json
-# + live Bet365/Pinnacle odds and predicted lineups (inferred from recent XIs;
-#   --lineups-json xis.json supplies manual XIs that win over the inference)
-python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups --out feed.json
+# + live Bet365/Pinnacle odds, predicted lineups (inferred from recent XIs;
+#   --lineups-json xis.json supplies manual XIs that win), and hand-collected
+#   Bet365 prop prices from a CSV (backend/props/)
+python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups \
+  --props-csv props/bet365_worldcup_master_props.csv --out feed.json
 
 # run the API (persistent ledger + feed + auto-settle); set STATIC_DIR to the
 # built frontend (frontend/dist) to serve the terminal from the same origin
@@ -64,6 +66,16 @@ python -m datalayer.jobs
 # everything together: terminal + API + scheduled feed job + persistent volume
 # (keys read from ../.env)
 docker compose up --build
+
+# backtest recorded snapshots (jobs writes history.jsonl every cycle)
+python -m datalayer.backtest history.jsonl --key "$API_FOOTBALL_KEY"
+```
+
+Cloud: one Render web service via the root `render.yaml` blueprint — see
+`DEPLOY.md` (free tier: sleeps when idle, SQLite resets on redeploys; optional
+`ACCESS_CODE` env turns on a basic-auth gate).
+
+```bash
 
 # tests (all pass, no network needed)
 for t in tests/*.py; do python "$t"; done

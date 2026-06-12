@@ -7,6 +7,7 @@ closing line value (CLV) — the fastest honest signal of real edge.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import time
@@ -58,6 +59,9 @@ CREATE TABLE IF NOT EXISTS bets (
 
 class Ledger:
     def __init__(self, path: str = "bets.db"):
+        parent = os.path.dirname(path)
+        if parent:  # e.g. /data/bets.db on a host without a mounted volume
+            os.makedirs(parent, exist_ok=True)
         # the Flask service hits this from request worker threads; one shared
         # connection guarded by a lock keeps sqlite3 happy at this scale
         self.conn = sqlite3.connect(path, check_same_thread=False)

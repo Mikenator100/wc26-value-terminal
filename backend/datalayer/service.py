@@ -16,15 +16,31 @@ from __future__ import annotations
 
 import os
 
-from flask import Flask, jsonify, request, send_file
+import hmac
+
+from flask import Flask, Response, jsonify, request, send_file
 
 from .betlog import Ledger, performance, fit_calibrator, segment_stats, calibration_table
 
 
 def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
-               static_dir: str = "") -> Flask:
+               static_dir: str = "", access_code: str = "") -> Flask:
     app = Flask(__name__)
     ledger = Ledger(db_path)
+
+    # optional friends-only gate: set ACCESS_CODE and the whole app (except the
+    # health check) asks for it as a password — any username works
+    if access_code:
+        @app.before_request
+        def gate():
+            if request.path == "/api/health":
+                return None
+            auth = request.authorization
+            if auth and auth.password and hmac.compare_digest(auth.password, access_code):
+                return None
+            return Response(
+                "Enter any username and the access code as the password.",
+                401, {"WWW-Authenticate": 'Basic realm="value-terminal"'})
 
     # serve the built terminal (frontend/dist) when present — one origin for
     # app + API, so a deploy is a single container
@@ -128,7 +144,32 @@ app = create_app(
     db_path=os.environ.get("LEDGER_DB", "bets.db"),
     feed_path=os.environ.get("FEED_PATH", "feed.json"),
     static_dir=os.environ.get("STATIC_DIR", ""),
+    access_code=os.environ.get("ACCESS_CODE", ""),
 )
+
+
+def _start_feed_thread() -> None:
+    """In-process scheduler for single-container hosts (Render free tier has
+    no background workers). Runs the same cycle as `python -m datalayer.jobs`."""
+    import threading
+    import time as _time
+    from .jobs import run_cycle
+
+    interval = int(os.environ.get("FEED_INTERVAL", "1800") or 1800)
+
+    def loop():
+        while True:
+            try:
+                run_cycle()
+            except Exception as e:
+                print(f"feed cycle failed: {e}")
+            _time.sleep(interval)
+
+    threading.Thread(target=loop, daemon=True, name="feedjob").start()
+
+
+if os.environ.get("ENABLE_FEED_JOB") and os.environ.get("API_FOOTBALL_KEY"):
+    _start_feed_thread()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY backend/datalayer ./datalayer
+# hand-collected prop-price CSVs (PROPS_CSV env points at one)
+COPY backend/props ./props
 # the built terminal, served by the Flask app at / (same origin as the API)
 COPY --from=frontend /fe/dist ./static
 ENV LEDGER_DB=/data/bets.db FEED_PATH=/data/feed.json STATIC_DIR=/app/static PORT=8000
