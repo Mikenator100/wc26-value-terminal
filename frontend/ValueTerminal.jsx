@@ -507,7 +507,7 @@ async function fetchFeed() {
 // server ledger row -> the shape the Track-record views render
 function fromServerBet(b) {
   return {
-    id: b.id, serverId: b.id, fixture: b.match_id, market: b.market,
+    id: b.id, serverId: b.id, fixture: b.fixture || b.match_id, market: b.market,
     selection: b.selection, modelProb: b.model_prob, price: b.price,
     stake: b.stake, status: b.status, closing: b.closing_price, pnl: b.pnl,
     ts: (b.ts || 0) * 1000,
@@ -2079,7 +2079,7 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, pape
               {paperRemote.open_bets.map((b, i) => (
                 <div className="sess-row" key={i}>
                   <div className="sess-meta">
-                    <span className="sess-fix">{b.match_id}</span>
+                    <span className="sess-fix">{b.fixture || b.match_id}</span>
                     <span className="sess-sel">{b.market} — {b.selection}</span>
                   </div>
                   <span className="vt-num">{pct(b.model_prob)}</span>

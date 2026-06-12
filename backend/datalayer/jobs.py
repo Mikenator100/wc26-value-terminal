@@ -51,6 +51,20 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
         os.makedirs(feed_dir, exist_ok=True)
     cache = FileCache(os.environ.get("CACHE_DIR", ".cache"))
 
+    # parse a structured slip CSV up front: its two teams get full squad
+    # depth, every other team is capped (players are the API-budget hog)
+    book = None
+    deep_teams = None
+    props_csv = os.environ.get("PROPS_CSV")
+    if props_csv and os.path.exists(props_csv):
+        try:
+            from .csvbook import is_structured, load_structured, _team_norm
+            if is_structured(props_csv):
+                book = load_structured(props_csv)
+                deep_teams = {_team_norm(book["home"]), _team_norm(book["away"])}
+        except Exception as e:
+            print(f"props csv pre-parse skipped: {e}")
+
     provider = ApiFootballProvider(key, cache=cache)
     feed = build_feed(
         provider,
@@ -60,6 +74,7 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
         team_form=_env_int("TEAM_FORM", 3),
         squad_limit=squad_limit if squad_limit is not None else _env_int("SQUAD_LIMIT", 8),
         auto_lineups=bool(_env_int("AUTO_LINEUPS", 1)) if auto_lineups is None else auto_lineups,
+        deep_teams=deep_teams,
     )
 
     if odds_key:
@@ -74,12 +89,11 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
         except Exception as e:
             print(f"odds merge skipped: {e}")
 
-    props_csv = os.environ.get("PROPS_CSV")
     if props_csv and os.path.exists(props_csv):
         try:
-            from .csvbook import is_structured, load_structured, merge_structured_into_feed
-            if is_structured(props_csv):
-                st = merge_structured_into_feed(feed, load_structured(props_csv))
+            from .csvbook import merge_structured_into_feed
+            if book is not None:
+                st = merge_structured_into_feed(feed, book)
                 if not st["match_found"]:
                     # the slip's match has left the feed (kicked off/finished):
                     # nothing is attached, no placeholders are injected — the

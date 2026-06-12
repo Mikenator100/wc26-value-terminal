@@ -24,8 +24,14 @@ from .normalize import build_player_profile, team_lambdas, recent_player_counts
 from .teamrates import team_rates, form_goal_averages, FINISHED
 from .lineups import predicted_from_recent_xis, name_key
 
-# seasons to aggregate the country split over (international samples are small)
-COUNTRY_SEASONS = [2023, 2024, 2025, 2026]
+# seasons to aggregate the country split over (international samples are
+# small). Each season is one API call per player — the single biggest cost in
+# a build — so this stays as short as the data allows.
+COUNTRY_SEASONS = [2024, 2025, 2026]
+
+# squad depth for matches WITHOUT a slip CSV: deep squads only pay off when
+# there are slip prices to match against
+SHALLOW_SQUAD = 12
 
 # WC2026 is at neutral venues — no home advantage — except for the three host
 # nations, who really do get the crowd (~ the usual venue edge on goals)
@@ -131,13 +137,18 @@ def build_match(
     predicted_lineups: Optional[dict] = None,
     team_form: int = 5,
     auto_lineups: bool = False,
+    deep_teams: Optional[set] = None,
 ) -> dict:
     """Build one match object. `predicted_lineups` is an optional external feed:
     {team_name: [{name, pos, startProb}]} from a predicted-XI source.
     `team_form` = recent finished fixtures per team used for count rates
     (corners/cards/shots); 0 skips those API calls. `auto_lineups` infers a
     predicted XI from each team's recent confirmed XIs (1 extra call per
-    finished form fixture, cached long); manual `predicted_lineups` win."""
+    finished form fixture, cached long); manual `predicted_lineups` win.
+    `deep_teams` (normalised names): only these get the full `squad_limit` —
+    everyone else is capped at SHALLOW_SQUAD, because each player costs
+    len(COUNTRY_SEASONS) API calls and deep squads only pay off where a slip
+    CSV has prices to match."""
     meta = _fixture_meta(fixture)
 
     # --- recent form window (shared by count rates + the xG fallback) ---- #
@@ -229,8 +240,13 @@ def build_match(
     # --- players --------------------------------------------------------- #
     players: list[dict] = []
     for team_name, team_id in ((meta["home"], meta["homeId"]), (meta["away"], meta["awayId"])):
+        limit = squad_limit
+        if deep_teams is not None:
+            from .csvbook import _team_norm
+            if _team_norm(team_name) not in deep_teams:
+                limit = min(squad_limit, SHALLOW_SQUAD)
         try:
-            roster = provider.team_players(team_id, season)[:squad_limit]
+            roster = provider.team_players(team_id, season)[:limit]
         except Exception:
             roster = []
         pred = (predicted_lineups or {}).get(team_name) or auto_pred.get(team_name) or []
@@ -303,6 +319,7 @@ def build_feed(
     team_form: int = 5,
     squad_limit: int = 8,
     auto_lineups: bool = False,
+    deep_teams: Optional[set] = None,
 ) -> list[dict]:
     fixtures = provider.fixtures(league, season)
     if only_upcoming:
@@ -312,7 +329,7 @@ def build_feed(
         fixtures = fixtures[:max_matches]
     return [build_match(provider, f, league, season, squad_limit=squad_limit,
                         predicted_lineups=predicted_lineups, team_form=team_form,
-                        auto_lineups=auto_lineups)
+                        auto_lineups=auto_lineups, deep_teams=deep_teams)
             for f in fixtures]
 
 
@@ -342,10 +359,21 @@ def main() -> None:
         with open(args.lineups_json) as f:
             predicted = ManualLineups(json.load(f)).to_seed_dict()
 
+    # a structured slip CSV is parsed up front so its two teams (and only
+    # those) get the full squad depth
+    book = None
+    deep_teams = None
+    if args.props_csv:
+        from .csvbook import is_structured, load_structured, _team_norm
+        if is_structured(args.props_csv):
+            book = load_structured(args.props_csv)
+            deep_teams = {_team_norm(book["home"]), _team_norm(book["away"])}
+
     provider = ApiFootballProvider(args.key, mode=args.mode, cache=FileCache())
     feed = build_feed(provider, args.league, args.season, max_matches=args.max_matches,
                       predicted_lineups=predicted, team_form=args.team_form,
-                      squad_limit=args.squad_limit, auto_lineups=args.auto_lineups)
+                      squad_limit=args.squad_limit, auto_lineups=args.auto_lineups,
+                      deep_teams=deep_teams)
 
     if args.odds_key:
         from .odds import TheOddsApiProvider, merge_odds_into_feed
@@ -359,9 +387,9 @@ def main() -> None:
             print(f"xg fitted to sharp no-vig prices for {n} matches")
 
     if args.props_csv:
-        from .csvbook import is_structured, load_structured, merge_structured_into_feed
-        if is_structured(args.props_csv):
-            st = merge_structured_into_feed(feed, load_structured(args.props_csv))
+        if book is not None:
+            from .csvbook import merge_structured_into_feed
+            st = merge_structured_into_feed(feed, book)
             print(f"book csv: {st}")
         else:
             from .csvprops import load_props_csv, merge_props_into_feed

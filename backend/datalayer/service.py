@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 import hmac
+import json
 
 from flask import Flask, Response, jsonify, request, send_file
 
@@ -92,7 +93,9 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
 
     @app.get("/api/bets")
     def list_bets():
-        return jsonify(ledger.all())
+        names = _fixture_names()
+        return jsonify([{**b, "fixture": names.get(str(b.get("match_id")), b.get("match_id"))}
+                        for b in ledger.all()])
 
     @app.post("/api/bets/<bid>/settle")
     def settle_bet(bid):
@@ -111,6 +114,16 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
         results = ApiFootballResults(ApiFootballProvider(key, cache=FileCache()))
         out = Settler(ledger, results).settle_open()
         return jsonify(out)
+
+    def _fixture_names() -> dict:
+        """match_id -> 'Home v Away', resolved from the current feed; ids of
+        departed fixtures fall back to the raw id."""
+        try:
+            with open(feed_path) as f:
+                return {str(m.get("id")): f"{m.get('home')} v {m.get('away')}"
+                        for m in json.load(f)}
+        except Exception:
+            return {}
 
     def _perf_payload(led: Ledger) -> dict:
         settled = led.settled()
@@ -135,8 +148,9 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
             "open": len(led.open_bets()),
             # newest first, for the Track-record open-bets list
             "open_bets": [
-                {k: b.get(k) for k in ("match_id", "market", "selection",
-                                       "model_prob", "price", "stake", "ts")}
+                {**{k: b.get(k) for k in ("match_id", "market", "selection",
+                                          "model_prob", "price", "stake", "ts")},
+                 "fixture": _fixture_names().get(str(b.get("match_id")), b.get("match_id"))}
                 for b in sorted(led.open_bets(), key=lambda b: -(b.get("ts") or 0))[:25]
             ],
         }
