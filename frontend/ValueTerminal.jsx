@@ -222,10 +222,18 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   };
 
   // void-aware exposure (mirrors the Python engine): book props void when the
-  // player takes no part, so fair prices are conditional on appearing — a
-  // non-starter who does appear plays sub minutes (~0.35 of a match). Raw
-  // startProb would systematically underprice every prop against the book.
-  const expo = startProb <= 0 ? 0 : startProb + (1 - startProb) * 0.35;
+  // player takes no part, so fair prices are conditional on appearing. The
+  // expected minutes come from his recent matches when the feed carries them
+  // (a 'comes off on 60' starter or a 15-minute super-sub stop pricing like
+  // 90-minute anchors); structural defaults otherwise.
+  const l5 = p.last5 || [];
+  const startsM = l5.filter((g) => (g.minutes || 0) >= 60).map((g) => g.minutes);
+  const subsM = l5.filter((g) => g.minutes > 0 && g.minutes < 60).map((g) => g.minutes);
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const startShare = !l5.length ? 1
+    : startsM.length ? clamp(avg(startsM) / 90, 0.7, 1) : 0.93;
+  const subShare = subsM.length ? clamp(avg(subsM) / 90, 0.1, 0.6) : 0.35;
+  const expo = startProb <= 0 ? 0 : startProb * startShare + (1 - startProb) * subShare;
 
   // Predictive grounding (Poisson-Gamma, mirrors the Python engine): the role
   // baseline is the prior, measured per-90s tilt it in proportion to how
@@ -244,12 +252,24 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
     return w * v + (1 - w) * prior;
   };
 
+  // shot-based scoring (mirrors the Python engine): goals are the noisiest
+  // stat; SOT-rate x finishing stabilises ~5x faster. Finishing shrinks to
+  // the role's conversion over ~12 observed SOT; 30% direct-goals mix kept.
+  const sotRate = grounded("sot", blend("sot"));
+  const convPrior = ROLE[pos].sot ? ROLE[pos].goals / ROLE[pos].sot : 0.3;
+  const bSot = blend("sot"), bGoals = blend("goals");
+  const nSot = effMins ? (bSot * effMins) / 90 : 0;
+  const wConv = nSot / (nSot + 12);
+  const convData = bSot > 0 ? bGoals / bSot : convPrior;
+  const conv = clamp(wConv * convData + (1 - wConv) * convPrior, 0.15, 0.7);
+  const goalsRate = 0.7 * sotRate * conv + 0.3 * grounded("goals", bGoals);
+
   // team-mass normalisation (second pricing pass): individually-estimated
   // attacking rates don't sum to the team's goal/shot budget — a squad can
   // easily "expect" 4 goals against a 1.7 xG — so MarketsView computes per-
   // team scales (teamXg / sum of expGoals, etc.) and re-prices with them
   const sc = ctx.scales || {};
-  let expGoals = grounded("goals", blend("goals")) * expo * attackF * (sc.goals ?? 1);
+  let expGoals = goalsRate * expo * attackF * (sc.goals ?? 1);
   let expSot = grounded("sot", blend("sot")) * expo * attackF * (sc.sot ?? 1);
   let expShots = grounded("shots", blend("shots")) * expo * attackF * (sc.shots ?? 1);
   let expAssists = grounded("assists", blend("assists")) * expo * attackF * (sc.assists ?? 1);

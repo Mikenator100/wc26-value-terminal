@@ -203,6 +203,35 @@ def test_elo_lambdas():
     print(f"elo lambdas ok (BRA-MAR {lh}/{la}, capped {bh}/{ba})")
 
 
+def test_elo_apply_results():
+    from datalayer.elo import apply_results, BASELINE
+
+    def fx(home, away, gh, ga, date):
+        return {"fixture": {"status": {"short": "FT"}, "date": date},
+                "teams": {"home": {"name": home}, "away": {"name": away}},
+                "goals": {"home": gh, "away": ga}}
+
+    base = dict(BASELINE)
+    # an upset: Canada beat Brazil — Canada gains, Brazil drops
+    t1 = apply_results(base, [fx("Canada", "Brazil", 2, 0, "2026-06-13")])
+    assert t1["canada"] > base["canada"] and t1["brazil"] < base["brazil"]
+    # a bigger margin moves ratings more than a narrow one
+    narrow = apply_results(base, [fx("Canada", "Brazil", 1, 0, "2026-06-13")])
+    assert t1["canada"] - base["canada"] > narrow["canada"] - base["canada"]
+    # expected wins barely move; draws against stronger sides gain
+    fav = apply_results(base, [fx("Brazil", "El Salvador", 3, 0, "2026-06-13")])
+    assert fav["brazil"] - base["brazil"] < 8
+    drew = apply_results(base, [fx("El Salvador", "Brazil", 1, 1, "2026-06-13")])
+    assert drew["el salvador"] > base["el salvador"]
+    # unknown teams are skipped, unfinished matches ignored
+    same = apply_results(base, [fx("Atlantis", "Brazil", 9, 0, "2026-06-13"),
+                                {"fixture": {"status": {"short": "NS"}, "date": ""},
+                                 "teams": {"home": {"name": "Canada"}, "away": {"name": "Brazil"}},
+                                 "goals": {"home": None, "away": None}}])
+    assert same == base
+    print(f"elo results ok (upset +{t1['canada'] - base['canada']:.1f}, routine win +{fav['brazil'] - base['brazil']:.1f})")
+
+
 def test_elo_weighting():
     from datalayer.elo import rating, goal_factor, load_table
     from datalayer.teamrates import form_goal_averages
@@ -220,6 +249,44 @@ def test_elo_weighting():
     strong_gf, _ = form_goal_averages(6, [fx("France")], elo_factor=factor)
     assert weak_gf < 2.0 < strong_gf
     print(f"elo weighting ok (2-0 vs ELS -> gf {weak_gf}, vs FRA -> gf {strong_gf})")
+
+
+def test_minutes_exposure():
+    from datalayer.countmarkets import _exposure
+    # 'starts but comes off on 60' starter: exposure well below a full match
+    rotated = {"last5": [{"minutes": 62}, {"minutes": 58}, {"minutes": 65}]}
+    e_rot = _exposure(rotated, 1.0)
+    assert 0.68 <= e_rot <= 0.75
+    # 90-minute anchor stays ~1
+    anchor = {"last5": [{"minutes": 90}, {"minutes": 90}, {"minutes": 90}]}
+    assert _exposure(anchor, 1.0) == 1.0
+    # super-sub: appears for ~20 minutes -> low exposure even at startProb 0.4
+    supersub = {"last5": [{"minutes": 20}, {"minutes": 18}, {"minutes": 25}]}
+    e_sub = _exposure(supersub, 0.4)
+    assert e_sub < 0.55
+    # no minutes data (sample path): legacy structural defaults
+    assert _exposure({}, 1.0) == 1.0
+    assert abs(_exposure({}, 0.0) - 0.0) < 1e-9
+    print(f"minutes exposure ok (rotated {e_rot:.2f}, super-sub {e_sub:.2f})")
+
+
+def test_shot_based_scoring():
+    from datalayer.countmarkets import player_expectations
+    base = {"sot": 1.0, "shots": 2.4, "assists": 0.2, "cards": 0.1,
+            "tackles": 0.5, "fouls": 1.0, "fouled": 1.2, "passes": 25.0, "saves": None}
+    # two strikers, same SOT volume, wildly different (small-sample) goal luck
+    cold = {"club": {**base, "goals": 0.05}, "country": {**base, "goals": 0.05},
+            "_minutes": {"club": 1800, "country": 600}}
+    hot = {"club": {**base, "goals": 1.1}, "country": {**base, "goals": 1.1},
+           "_minutes": {"club": 1800, "country": 600}}
+    ec = player_expectations(cold, "ST", 1.0, team_xg=1.35, opp_xg=1.35)
+    eh = player_expectations(hot, "ST", 1.0, team_xg=1.35, opp_xg=1.35)
+    # shot-based pricing pulls both toward SOT x conversion: the cold finisher
+    # prices well above his raw 0.05 goals/90, the hot one below his raw 1.1
+    assert ec["goals"] > 0.15
+    assert eh["goals"] < 0.85
+    assert eh["goals"] > ec["goals"]  # finishing signal isn't erased
+    print(f"shot-based scoring ok (cold {ec['goals']:.2f}, hot {eh['goals']:.2f})")
 
 
 def test_effective_country_weight():
@@ -282,7 +349,10 @@ if __name__ == "__main__":
     test_build_match_team_rates()
     test_recent_player_counts()
     test_elo_lambdas()
+    test_elo_apply_results()
     test_elo_weighting()
+    test_minutes_exposure()
+    test_shot_based_scoring()
     test_effective_country_weight()
     test_build_match_auto_lineups()
     print("\nALL TEAM-RATE TESTS PASSED\n")

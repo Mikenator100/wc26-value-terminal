@@ -61,19 +61,64 @@ def _norm(s: str) -> str:
 
 
 def load_table() -> dict[str, float]:
+    """Baseline snapshot + manual overrides (ELO_JSON) + in-tournament state
+    (ELO_STATE, written by the jobs loop after each cycle's results)."""
     table = dict(BASELINE)
-    path = os.environ.get("ELO_JSON")
-    if path and os.path.exists(path):
-        try:
-            with open(path) as f:
-                table.update({_norm(k): float(v) for k, v in json.load(f).items()})
-        except Exception as e:
-            print(f"ELO_JSON ignored: {e}")
+    for env in ("ELO_JSON", "ELO_STATE"):
+        path = os.environ.get(env)
+        if path and os.path.exists(path):
+            try:
+                with open(path) as f:
+                    table.update({_norm(k): float(v) for k, v in json.load(f).items()})
+            except Exception as e:
+                print(f"{env} ignored: {e}")
     return table
 
 
 def rating(team_name: str, table: Optional[dict[str, float]] = None) -> Optional[float]:
     return (table if table is not None else load_table()).get(_norm(team_name))
+
+
+# tournament K-factor (eloratings.net uses 50-60 for World Cup matches) and
+# the standard margin multiplier
+K_FACTOR = 50.0
+
+
+def _margin_mult(diff: int) -> float:
+    if diff <= 1:
+        return 1.0
+    if diff == 2:
+        return 1.5
+    return (11 + diff) / 8
+
+
+def apply_results(table: dict[str, float], fixtures: list[dict]) -> dict[str, float]:
+    """Update a ratings table from finished fixtures (chronological order).
+
+    Standard Elo: expected score from the rating gap, K scaled by the margin
+    of victory. Returns a NEW table; unknown teams are skipped (a rating
+    invented from one match would be noise)."""
+    out = dict(table)
+    finished = [f for f in fixtures
+                if ((f.get("fixture") or {}).get("status") or {}).get("short") in ("FT", "AET", "PEN")]
+    finished.sort(key=lambda f: (f.get("fixture") or {}).get("date") or "")
+    for f in finished:
+        teams, goals = f.get("teams") or {}, f.get("goals") or {}
+        hn = (teams.get("home") or {}).get("name", "")
+        an = (teams.get("away") or {}).get("name", "")
+        gh, ga = goals.get("home"), goals.get("away")
+        if gh is None or ga is None:
+            continue
+        kh, ka = _norm(hn), _norm(an)
+        if kh not in out or ka not in out:
+            continue
+        rh, ra = out[kh], out[ka]
+        exp_home = 1 / (1 + 10 ** ((ra - rh) / 400))
+        score = 1.0 if gh > ga else 0.0 if gh < ga else 0.5
+        delta = K_FACTOR * _margin_mult(abs(gh - ga)) * (score - exp_home)
+        out[kh] = round(rh + delta, 1)
+        out[ka] = round(ra - delta, 1)
+    return out
 
 
 def goal_factor(opp_rating: Optional[float]) -> float:

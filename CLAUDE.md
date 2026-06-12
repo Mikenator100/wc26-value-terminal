@@ -149,8 +149,16 @@ exact feed JSON contract (the integration boundary between the two halves).
 - **Player props**: blend club + country per-90 rates (kept separate on purpose)
   with the blend **shrunk toward the better-sampled source** (minutes-weighted;
   the country-weight slider states a preference, the data earns its say),
-  rescale to the player's match position, scale by **void-aware exposure**
-  (book props void on no-show, so prices are conditional on appearing).
+  rescale to the player's match position (rescale factor bounded [0.6, 1.6]),
+  scale by **void-aware exposure measured from recent minutes** (book props
+  void on no-show; a 'comes off on 60' starter or a 15-minute super-sub no
+  longer prices like a 90-minute anchor). Rates use **predictive grounding**
+  (Poisson-Gamma: role baseline is the prior, prior strength = minutes to
+  expect ~3 events, so thin zero-count samples stop reading as zero ability)
+  and **scoring is shot-based** (SOT-rate × finishing shrunk to role
+  conversion, 30% direct-goals mix — goals are the noisiest stat). A
+  **team-mass normalisation** pass scales each squad's goals/assists/shots
+  to the match's (market-fitted) budget.
 - **Prop accuracy**: attacking output scales with the team's match xG vs baseline
   (opponent defence is baked into xG); defensive/discipline output scales with the
   opponent's attack; `pen`/`fk` flags add set-piece contribution to the taker.

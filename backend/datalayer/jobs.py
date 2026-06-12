@@ -66,6 +66,24 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
             print(f"props csv pre-parse skipped: {e}")
 
     provider = ApiFootballProvider(key, cache=cache)
+
+    # in-tournament Elo: re-derive ratings from the baseline + every finished
+    # WC fixture so far (idempotent — recomputed from scratch each cycle) and
+    # write them where elo.load_table() picks them up for this build
+    try:
+        from .elo import BASELINE, apply_results
+        fixtures_all = provider.fixtures(_env_int("LEAGUE", 1), _env_int("SEASON", 2026))
+        updated = apply_results(BASELINE, fixtures_all)
+        changed = {k: v for k, v in updated.items() if v != BASELINE.get(k)}
+        state_path = os.environ.setdefault(
+            "ELO_STATE", os.path.join(_data_dir(), "elo_state.json"))
+        with open(state_path, "w") as f:
+            json.dump(updated, f)
+        if changed:
+            print(f"elo updated from results: {len(changed)} teams moved")
+    except Exception as e:
+        print(f"elo update skipped: {e}")
+
     feed = build_feed(
         provider,
         league=_env_int("LEAGUE", 1),

@@ -192,6 +192,24 @@ def _clamp(x, lo, hi):
 # minutes a non-starter plays *when he does appear* (sub ~30'), as a share of 90
 _SUB_MINUTES_SHARE = 0.35
 
+
+def _exposure(profile: dict, start_prob: float) -> float:
+    """Void-aware expected minutes share, measured from the player's recent
+    matches when the feed carries them (last5): a 'starts but comes off on
+    60' player and a 15-minute super-sub stop being priced like 90-minute
+    anchors. Without recent data, the structural defaults apply."""
+    if start_prob <= 0:
+        return 0.0
+    l5 = profile.get("last5") or []
+    starts = [g["minutes"] for g in l5 if (g.get("minutes") or 0) >= 60]
+    subs = [g["minutes"] for g in l5 if 0 < (g.get("minutes") or 0) < 60]
+    if not l5:
+        start_share = 1.0  # legacy/sample path: no minutes data at all
+    else:
+        start_share = _clamp(sum(starts) / len(starts) / 90.0, 0.7, 1.0) if starts else 0.93
+    sub_share = _clamp(sum(subs) / len(subs) / 90.0, 0.1, 0.6) if subs else _SUB_MINUTES_SHARE
+    return start_prob * start_share + (1 - start_prob) * sub_share
+
 # sample-size half-life for the club/country blend: a source with 540 measured
 # minutes (~6 matches) earns half its full say
 _CONF_MINUTES = 540.0
@@ -229,7 +247,7 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
     """
     attack = _clamp(team_xg / _BASE_G, 0.6, 1.7)
     defend = _clamp(opp_xg / _BASE_G, 0.6, 1.7)
-    start_prob = 0.0 if start_prob <= 0 else start_prob + (1 - start_prob) * _SUB_MINUTES_SHARE
+    start_prob = _exposure(profile, start_prob)
     country_weight = effective_country_weight(profile, country_weight)
     sp = set_pieces or {}
     club, country = profile.get("club", {}), profile.get("country", {})
@@ -271,11 +289,25 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         w = eff_mins / (eff_mins + k)
         return w * value + (1 - w) * prior
 
+    # shot-based scoring: goals are the noisiest stat in football; shots on
+    # target happen ~5x more often, so SOT-rate x finishing stabilises much
+    # faster than raw goals/90. Finishing shrinks toward the role's conversion
+    # over ~12 observed SOT; a 30% direct-goals mix keeps genuine finishing
+    # signal (penalty/free-kick duty is added separately by set_pieces).
+    sot_rate = grounded("sot", blend("sot"))
+    conv_prior = (rc.get("goals", 0.15) / rc["sot"]) if rc.get("sot") else 0.3
+    b_sot, b_goals = blend("sot"), blend("goals")
+    n_sot = b_sot * eff_mins / 90.0 if eff_mins else 0.0
+    w_conv = n_sot / (n_sot + 12.0)
+    conv_data = (b_goals / b_sot) if b_sot > 0 else conv_prior
+    conv = _clamp(w_conv * conv_data + (1 - w_conv) * conv_prior, 0.15, 0.7)
+    goals_rate = 0.7 * sot_rate * conv + 0.3 * grounded("goals", b_goals)
+
     # team-mass normalisation (mirrors the JSX second pass): callers that see
     # the whole squad pass scales so players share the team's goal/shot budget
     sc = team_scales or {}
     exp = {
-        "goals": grounded("goals", blend("goals")) * start_prob * attack * sc.get("goals", 1.0),
+        "goals": goals_rate * start_prob * attack * sc.get("goals", 1.0),
         "sot": grounded("sot", blend("sot")) * start_prob * attack * sc.get("sot", 1.0),
         "shots": grounded("shots", blend("shots")) * start_prob * attack * sc.get("shots", 1.0),
         "assists": grounded("assists", blend("assists")) * start_prob * attack * sc.get("assists", 1.0),
