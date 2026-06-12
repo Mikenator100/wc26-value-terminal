@@ -125,7 +125,10 @@ exact feed JSON contract (the integration boundary between the two halves).
 - **xG hierarchy** (strongest signal wins): (1) **market-implied** — when
   Pinnacle has priced the match, `snapshots.implied_lambdas` inverts the
   de-vigged 1X2+totals into the lambdas, so every derived market stays
-  coherent with the sharp line; (2) **Elo matchup anchor**
+  coherent with the sharp line; (2) **Elo matchup anchor** — and the Elo is
+  **live**: each jobs cycle re-derives ratings from the baseline + every
+  finished WC fixture (`elo.apply_results`, K=50, margin multiplier,
+  idempotent, written to `ELO_STATE`)
   (`elo.elo_lambdas`: ~220 rating points ≈ 1 goal around a 2.6-goal total)
   tilted ±18% by Elo-weighted recent form — raw form averages are never
   used directly, qualifier blowouts vs minnows read like 4 goals/game even
