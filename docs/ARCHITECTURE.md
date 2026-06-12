@@ -54,9 +54,16 @@
       "predictedPos": "W", "confirmedPos": "W",
       "startProb": 0.85, "confirmedIn": false,
       "pen": true, "fk": true,              // set-piece duty flags
-      "club":    { "shots": 2.6, "sot": 1.0, "goals": 0.45, "assists": 0.40, "cards": 0.15 },
-      "country": { "shots": 2.3, "sot": 0.9, "goals": 0.38, "assists": 0.33, "cards": 0.14 }
-      // goalkeepers carry a "saves" per-90 in club/country
+      "club":    { "shots": 2.6, "sot": 1.0, "goals": 0.45, "assists": 0.40, "cards": 0.15,
+                   "tackles": 0.8, "fouls": 0.9, "fouled": 1.4, "passes": 28.5, "saves": null },
+      "country": { "shots": 2.3, "sot": 0.9, "goals": 0.38, "assists": 0.33, "cards": 0.14,
+                   "tackles": null, "fouls": null, "fouled": null, "passes": null, "saves": null },
+      // count metrics are None when the source didn't record them -> the
+      // pricing engines fall back to role baselines
+      "_minutes": { "club": 2600, "country": 640 },   // sample-size weighting
+      "bookOdds": { "Shots on target 1+": 1.40 },     // props CSV, when matched
+      "last5": [ { "shots": 2, "sot": 1, "tackles": 0, "fouls": 1, "minutes": 90 } ]
+      // per-match counts, newest first, played matches only (L5 strips)
     }
   ]
 }

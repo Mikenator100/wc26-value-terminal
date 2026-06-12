@@ -191,6 +191,32 @@ def build_player_profile(
     }
 
 
+def recent_player_counts(fixture_players_payloads: list[list[dict]]) -> dict[int, list[dict]]:
+    """Per-match count lines per player, from fixtures/players payloads
+    (newest fixture first). Powers the terminal's last-5 strips.
+
+    Returns {player_id: [{shots, sot, tackles, fouls, minutes}, ...]} with one
+    entry per match actually played (0 minutes = didn't feature = no line).
+    """
+    out: dict[int, list[dict]] = {}
+    for payload in fixture_players_payloads:
+        for team_block in payload or []:
+            for entry in team_block.get("players", []):
+                pid = (entry.get("player") or {}).get("id")
+                stats = (entry.get("statistics") or [{}])[0]
+                minutes = _safe(stats, "games", "minutes")
+                if not pid or not minutes:
+                    continue
+                out.setdefault(pid, []).append({
+                    "shots": _safe(stats, "shots", "total"),
+                    "sot": _safe(stats, "shots", "on"),
+                    "tackles": _safe(stats, "tackles", "total"),
+                    "fouls": _safe(stats, "fouls", "committed"),
+                    "minutes": minutes,
+                })
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # expected goals for a fixture -> feeds the terminal's Poisson score matrix
 # --------------------------------------------------------------------------- #

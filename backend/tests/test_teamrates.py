@@ -153,6 +153,30 @@ def test_build_match_team_rates():
           f"form xg {m['xgHome']}-{m['xgAway']})")
 
 
+def test_recent_player_counts():
+    from datalayer.normalize import recent_player_counts
+
+    def fp_payload(lines):
+        # one fixtures/players response: [{team, players:[{player, statistics}]}]
+        return [{"team": {"id": 6}, "players": [
+            {"player": {"id": pid}, "statistics": [{
+                "games": {"minutes": mins},
+                "shots": {"total": sh, "on": so},
+                "tackles": {"total": tk},
+                "fouls": {"committed": fo},
+            }]} for pid, mins, sh, so, tk, fo in lines]}]
+
+    payloads = [
+        fp_payload([(11, 90, 4, 2, 1, 1), (12, 0, None, None, None, None)]),  # newest
+        fp_payload([(11, 85, 2, 1, 0, 2)]),
+    ]
+    counts = recent_player_counts(payloads)
+    assert [g["shots"] for g in counts[11]] == [4, 2]   # newest first
+    assert counts[11][0]["sot"] == 2 and counts[11][1]["fouls"] == 2
+    assert 12 not in counts                              # 0 minutes = didn't play
+    print(f"recent player counts ok ({counts[11]})")
+
+
 def test_elo_weighting():
     from datalayer.elo import rating, goal_factor, load_table
     from datalayer.teamrates import form_goal_averages
@@ -230,6 +254,7 @@ if __name__ == "__main__":
     test_player_count_rates()
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
+    test_recent_player_counts()
     test_elo_weighting()
     test_effective_country_weight()
     test_build_match_auto_lineups()

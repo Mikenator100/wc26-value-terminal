@@ -292,6 +292,30 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   };
 }
 
+// collapsible market families inside a player card; statKey links a family to
+// the feed's last-5 per-match counts (shots/sot/tackles/fouls only)
+const PROP_FAMILIES = [
+  { name: "Scoring", match: (n) => n === "Anytime goalscorer" || n === "To score or assist" },
+  { name: "Shots", match: (n) => /^Shots \d/.test(n), statKey: "shots" },
+  { name: "Shots on target", match: (n) => n.startsWith("Shots on target"), statKey: "sot" },
+  { name: "Tackles", match: (n) => n.startsWith("Tackles"), statKey: "tackles" },
+  { name: "Fouls committed", match: (n) => n.startsWith("Fouls committed"), statKey: "fouls" },
+  { name: "Saves", match: (n) => n.startsWith("Saves") },
+  { name: "Other", match: () => true },
+];
+
+function groupProps(props) {
+  const used = new Set();
+  return PROP_FAMILIES.map((f) => ({
+    ...f,
+    props: props.filter((pr) => {
+      if (used.has(pr.name) || !f.match(pr.name)) return false;
+      used.add(pr.name);
+      return true;
+    }),
+  })).filter((f) => f.props.length);
+}
+
 /* ---------- sample feed (replace with adapter) ---------- */
 const SAMPLE_MATCHES = [
   {
@@ -886,6 +910,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [playerCW, setPlayerCW] = useState(0.6); // country weight for props
   const [playerBook, setPlayerBook] = useState({}); // "name|market" -> odds
   const [openPlayers, setOpenPlayers] = useState({}); // name -> expanded card
+  const [openFams, setOpenFams] = useState({}); // "name|family" -> expanded
   const players = useMemo(
     () =>
       base.players.map((p) => {
@@ -1423,47 +1448,73 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                     </button>
                     {open && (
                     <div className="vt-proptable">
-                      <div className="vt-prow vt-prow--head">
-                        <span>Market</span>
-                        <span className="vt-num">Hit</span>
-                        <span className="vt-num">Fair</span>
-                        <span className="vt-num">Bet365</span>
-                        <span className="vt-num">Edge</span>
-                      </div>
-                      {p.props.map((pr) => {
-                        const key = `${p.name}|${pr.name}`;
-                        const raw = playerBook[key];
-                        // feed-supplied slip price (props CSV) unless typed over
-                        const fromFeed = p.bookOdds?.[pr.name];
-                        const shown = raw !== undefined ? raw : fromFeed ?? "";
-                        const bookOdds = shown && Number(shown) > 1 ? Number(shown) : null;
-                        const e = bookOdds ? bookOdds * pr.hitRate - 1 : null;
+                      {groupProps(p.props).map((fam) => {
+                        const fkey = `${p.name}|${fam.name}`;
+                        const fopen = !!openFams[fkey];
+                        // last-5 per-match counts, newest first (feed-supplied)
+                        const l5 = fam.statKey && p.last5?.length
+                          ? p.last5.map((g) => g[fam.statKey] ?? 0).join(" · ")
+                          : null;
                         return (
-                          <div className="vt-prow" key={pr.name}>
-                            <span className="vt-pmkt">{pr.name}</span>
-                            <span className="vt-num vt-hit">{pct(pr.hitRate)}</span>
-                            <span className="vt-num vt-fair">{od(pr.fairOdds)}</span>
-                            <span className="vt-num">
-                              <input
-                                className="vt-pinput"
-                                type="number"
-                                step="0.05"
-                                placeholder="—"
-                                value={shown}
-                                onChange={(ev) =>
-                                  setPlayerBook((b) => ({
-                                    ...b,
-                                    [key]: ev.target.value,
-                                  }))
-                                }
-                              />
-                            </span>
-                            <span
-                              className="vt-num"
-                              style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}
+                          <div className="vt-fam" key={fam.name}>
+                            <button
+                              className="vt-famhead"
+                              onClick={() => setOpenFams((s) => ({ ...s, [fkey]: !fopen }))}
                             >
-                              {e == null ? "—" : signedPct(e)}
-                            </span>
+                              <span>{fam.name}</span>
+                              <span className="vt-famr">
+                                {l5 && <i className="vt-faml5">L5 {l5}</i>}
+                                <i className="cat-gcount">{fopen ? "−" : "+"}</i>
+                              </span>
+                            </button>
+                            {fopen && (
+                              <>
+                                <div className="vt-prow vt-prow--head">
+                                  <span>Market</span>
+                                  <span className="vt-num">Hit</span>
+                                  <span className="vt-num">Fair</span>
+                                  <span className="vt-num">Bet365</span>
+                                  <span className="vt-num">Edge</span>
+                                </div>
+                                {fam.props.map((pr) => {
+                                  const key = `${p.name}|${pr.name}`;
+                                  const raw = playerBook[key];
+                                  // feed-supplied slip price (props CSV) unless typed over
+                                  const fromFeed = p.bookOdds?.[pr.name];
+                                  const shown = raw !== undefined ? raw : fromFeed ?? "";
+                                  const bookOdds = shown && Number(shown) > 1 ? Number(shown) : null;
+                                  const e = bookOdds ? bookOdds * pr.hitRate - 1 : null;
+                                  return (
+                                    <div className="vt-prow" key={pr.name}>
+                                      <span className="vt-pmkt">{pr.name}</span>
+                                      <span className="vt-num vt-hit">{pct(pr.hitRate)}</span>
+                                      <span className="vt-num vt-fair">{od(pr.fairOdds)}</span>
+                                      <span className="vt-num">
+                                        <input
+                                          className="vt-pinput"
+                                          type="number"
+                                          step="0.05"
+                                          placeholder="—"
+                                          value={shown}
+                                          onChange={(ev) =>
+                                            setPlayerBook((b) => ({
+                                              ...b,
+                                              [key]: ev.target.value,
+                                            }))
+                                          }
+                                        />
+                                      </span>
+                                      <span
+                                        className="vt-num"
+                                        style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}
+                                      >
+                                        {e == null ? "—" : signedPct(e)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            )}
                           </div>
                         );
                       })}
@@ -2322,6 +2373,12 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-plrhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px;}
 .vt-plrhead--toggle{width:100%;background:none;border:none;color:var(--bone);padding:0;cursor:pointer;font-family:inherit;}
 .vt-plrhead--toggle:hover .vt-plrname{color:var(--val);}
+.vt-fam{border-top:1px solid var(--line);}
+.vt-fam:first-child{border-top:none;}
+.vt-famhead{width:100%;display:flex;justify-content:space-between;align-items:center;background:none;border:none;color:var(--bone);padding:8px 2px;font:600 12px 'Space Grotesk',sans-serif;cursor:pointer;}
+.vt-famhead:hover{color:var(--val);}
+.vt-famr{display:flex;align-items:center;gap:10px;}
+.vt-faml5{font-style:normal;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);font-weight:400;}
 .vt-plrname{font-weight:600;font-size:15px;}
 .vt-plrmeta{color:var(--muted);font-size:11px;margin-top:2px;}
 .vt-poschip{background:var(--panelHi);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px;font-weight:600;font-family:'JetBrains Mono',monospace;}

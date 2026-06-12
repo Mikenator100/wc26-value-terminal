@@ -20,7 +20,7 @@ import json
 from typing import Optional
 
 from .providers import ApiFootballProvider, FileCache, Provider
-from .normalize import build_player_profile, team_lambdas
+from .normalize import build_player_profile, team_lambdas, recent_player_counts
 from .teamrates import team_rates, form_goal_averages, FINISHED
 from .lineups import predicted_from_recent_xis, name_key
 
@@ -184,6 +184,22 @@ def build_match(
             if xi:
                 auto_pred[tname] = xi
 
+    # --- per-player recent match counts (the last-5 strips) --------------- #
+    recent_counts: dict[int, list[dict]] = {}
+    if team_form:
+        payloads = []
+        for side in ("home", "away"):
+            for fx in recent[side]:
+                status = ((fx.get("fixture") or {}).get("status") or {}).get("short")
+                fid = (fx.get("fixture") or {}).get("id")
+                if status not in FINISHED or not fid:
+                    continue
+                try:
+                    payloads.append(provider.fixture_players(int(fid)))
+                except Exception:
+                    continue
+        recent_counts = recent_player_counts(payloads)
+
     # --- players --------------------------------------------------------- #
     players: list[dict] = []
     for team_name, team_id in ((meta["home"], meta["homeId"]), (meta["away"], meta["awayId"])):
@@ -218,6 +234,7 @@ def build_match(
             )
             if not profile:
                 continue
+            profile["last5"] = recent_counts.get(pid, [])[:5]  # newest first
 
             # overlay confirmed XI when present
             if pname in confirmed:

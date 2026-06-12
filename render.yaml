@@ -34,7 +34,7 @@ services:
       - key: MAX_MATCHES
         value: "8"               # API-budget guard (free tier ~100 calls/day)
       - key: TEAM_FORM
-        value: "3"
+        value: "5"               # form window; also the depth of the L5 strips
       - key: SQUAD_LIMIT
         value: "8"
       - key: AUTO_LINEUPS
