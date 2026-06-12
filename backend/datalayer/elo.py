@@ -34,6 +34,7 @@ BASELINE: dict[str, float] = {
     "usa": 1790, "switzerland": 1840, "denmark": 1850, "ecuador": 1880,
     "senegal": 1820, "iran": 1760, "south korea": 1770, "korea republic": 1770,
     "australia": 1740, "austria": 1830, "ukraine": 1780, "turkey": 1830,
+    "turkiye": 1830,  # API-Football's spelling, post accent-strip
     "sweden": 1760, "poland": 1770, "serbia": 1770, "wales": 1720,
     "scotland": 1750, "norway": 1850, "czech republic": 1750, "czechia": 1750,
     "hungary": 1730, "greece": 1790, "russia": 1760, "slovakia": 1720,
@@ -43,6 +44,10 @@ BASELINE: dict[str, float] = {
     "canada": 1730, "panama": 1680, "costa rica": 1620, "jamaica": 1600,
     "honduras": 1570, "el salvador": 1450, "trinidad and tobago": 1460,
     "guatemala": 1540, "curacao": 1580, "haiti": 1560, "new zealand": 1590,
+    "bosnia and herzegovina": 1660, "bosnia & herzegovina": 1660,
+    "cote d'ivoire": 1760, "republic of ireland": 1680, "ireland": 1680,
+    "north macedonia": 1640, "albania": 1640, "georgia": 1660,
+    "korea dpr": 1450, "north korea": 1450,
     "saudi arabia": 1640, "qatar": 1630, "iraq": 1620, "uae": 1610,
     "jordan": 1630, "uzbekistan": 1640, "china": 1540, "india": 1380,
     "paraguay": 1780, "peru": 1740, "chile": 1730, "venezuela": 1720,
@@ -78,3 +83,23 @@ def goal_factor(opp_rating: Optional[float]) -> float:
         return 1.0
     f = 10 ** ((opp_rating - REF) / SCALE)
     return max(FACTOR_RANGE[0], min(FACTOR_RANGE[1], f))
+
+
+# the matchup anchor: WC matches average ~2.6 goals; ~220 Elo points of
+# rating gap is worth about one goal of expected superiority
+TOTAL_GOALS = 2.6
+ELO_PER_GOAL = 220.0
+
+
+def elo_lambdas(r_home: float, r_away: float, venue_mult: float = 1.0,
+                total: float = TOTAL_GOALS) -> tuple[float, float]:
+    """Expected goals for each side straight from the Elo matchup.
+
+    Small-sample form averages are unreliable strength estimates across
+    uneven schedules (qualifier blowouts vs elite friendlies); the rating
+    difference is the steadier anchor — form should only tilt it.
+    """
+    d = max(-2.2, min(2.2, (r_home - r_away) / ELO_PER_GOAL))
+    lam_home = max(0.25, (total + d) / 2) * venue_mult
+    lam_away = max(0.25, (total - d) / 2) / venue_mult
+    return round(lam_home, 3), round(lam_away, 3)

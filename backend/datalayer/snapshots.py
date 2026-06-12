@@ -93,6 +93,76 @@ def _parse_line(label: str) -> Optional[float]:
         return None
 
 
+def implied_lambdas(markets: list[dict]) -> Optional[tuple[float, float]]:
+    """Invert the sharp no-vig prices into the (λ_home, λ_away) the DC score
+    matrix reproduces best.
+
+    When Pinnacle has priced a match, the de-vigged 1X2 (+ totals when
+    present) is a far better strength estimate than any small-sample form
+    average — fitting the lambdas to it makes every derived market (correct
+    scores, team totals, ranges) coherent with the sharpest available signal
+    instead of amplifying form noise into absurd tail prices.
+    """
+    target_1x2 = None
+    target_ou = None
+    for mk in markets or []:
+        outs = mk.get("outcomes", [])
+        sharp = _no_vig([o.get("pinnacle") for o in outs])
+        if mk.get("key") == "1x2" and len(outs) == 3 and all(sharp):
+            target_1x2 = sharp
+        elif mk.get("key") == "ou25" and len(outs) == 2 and all(sharp):
+            line = _parse_line(outs[0].get("label", ""))
+            if line is not None:
+                target_ou = (line, sharp[0])
+    if not target_1x2:
+        return None
+
+    def loss(lh: float, la: float) -> float:
+        m = score_matrix(lh, la)
+        rp = result_probs(m)
+        err = ((rp["home"] - target_1x2[0]) ** 2
+               + (rp["draw"] - target_1x2[1]) ** 2
+               + (rp["away"] - target_1x2[2]) ** 2)
+        if target_ou:
+            line, p_over = target_ou
+            err += (total_over_prob(m, line) - p_over) ** 2
+        return err
+
+    # coarse-to-fine grid search; the matrix is cheap and this needs no deps
+    best, best_err = (1.3, 1.3), float("inf")
+    step, lo, hi = 0.15, 0.25, 3.4
+    grid = [lo + i * step for i in range(int((hi - lo) / step) + 1)]
+    for lh in grid:
+        for la in grid:
+            e = loss(lh, la)
+            if e < best_err:
+                best, best_err = (lh, la), e
+    for step in (0.05, 0.01):
+        bh, ba = best
+        cand = [(bh + i * step, ba + j * step) for i in range(-3, 4) for j in range(-3, 4)]
+        for lh, la in cand:
+            if lh <= 0.1 or la <= 0.1:
+                continue
+            e = loss(lh, la)
+            if e < best_err:
+                best, best_err = (lh, la), e
+    return round(best[0], 3), round(best[1], 3)
+
+
+def apply_market_xg(feed: list[dict]) -> int:
+    """Replace each match's xG with the market-implied fit where sharp prices
+    exist (the form/Elo estimate is kept as xgModelHome/Away for reference)."""
+    n = 0
+    for match in feed:
+        fit = implied_lambdas(match.get("markets") or [])
+        if not fit:
+            continue
+        match["xgModelHome"], match["xgModelAway"] = match.get("xgHome"), match.get("xgAway")
+        match["xgHome"], match["xgAway"] = fit
+        n += 1
+    return n
+
+
 def snapshot_feed(feed: list[dict], ts: Optional[float] = None) -> list[dict]:
     """One row per priced outcome across the feed's merged markets."""
     ts = ts or time.time()

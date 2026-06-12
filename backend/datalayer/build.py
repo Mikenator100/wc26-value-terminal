@@ -108,6 +108,20 @@ def _form_stats(team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
                       "against": {"average": {"total": fg[1]}}}}
 
 
+def _form_tilt(team_id: int, recent_fixtures: list[dict], table: dict) -> float:
+    """Gentle recent-form multiplier on the Elo anchor (~±18% at most).
+
+    Raw form averages are too noisy to set xG outright — a qualifier-blowout
+    schedule reads as 4 goals/game even after opponent discounts — so form
+    only tilts the rating-based estimate."""
+    from .elo import rating, goal_factor
+    fg = form_goal_averages(team_id, recent_fixtures,
+                            elo_factor=lambda opp: goal_factor(rating(opp, table)))
+    if not fg or fg[0] <= 0:
+        return 1.0
+    return max(0.85, min(1.18, (fg[0] / 1.3) ** 0.3))
+
+
 def build_match(
     provider: Provider,
     fixture: dict,
@@ -141,20 +155,32 @@ def build_match(
         as_ = provider.team_statistics(league, season, meta["awayId"])
     except Exception:
         hs = as_ = {}
-    # early in the tournament the league-season stats have nothing to average;
-    # fall back to goals for/against over the recent form window
-    if _games_played(hs) < 3:
-        hs = _form_stats(meta["homeId"], recent["home"]) or hs
-    if _games_played(as_) < 3:
-        as_ = _form_stats(meta["awayId"], recent["away"]) or as_
-    preds = None
-    try:
-        preds = provider.predictions(int(meta["id"]))
-    except Exception:
-        pass
-    xg_home, xg_away = team_lambdas(
-        hs, as_, predictions=preds,
-        home_adv=_venue_advantage(meta["home"], meta["away"]))
+    adv = _venue_advantage(meta["home"], meta["away"])
+    degenerate = _games_played(hs) < 3 or _games_played(as_) < 3
+
+    if degenerate:
+        # early in the tournament the league-season stats have nothing to
+        # average. The Elo matchup is the anchor (small-sample form averages
+        # are wild across uneven schedules); recent form only tilts it.
+        from .elo import load_table, rating, elo_lambdas
+        table = load_table()
+        rh, ra = rating(meta["home"], table), rating(meta["away"], table)
+        if rh is not None and ra is not None:
+            base_h, base_a = elo_lambdas(rh, ra, venue_mult=adv)
+            xg_home = round(base_h * _form_tilt(meta["homeId"], recent["home"], table), 3)
+            xg_away = round(base_a * _form_tilt(meta["awayId"], recent["away"], table), 3)
+        else:
+            # unrated team: the old form-average fallback
+            hs2 = _form_stats(meta["homeId"], recent["home"]) or hs
+            as2 = _form_stats(meta["awayId"], recent["away"]) or as_
+            xg_home, xg_away = team_lambdas(hs2, as2, home_adv=adv)
+    else:
+        preds = None
+        try:
+            preds = provider.predictions(int(meta["id"]))
+        except Exception:
+            pass
+        xg_home, xg_away = team_lambdas(hs, as_, predictions=preds, home_adv=adv)
 
     # --- confirmed lineup (if released) --------------------------------- #
     confirmed = {}
@@ -327,6 +353,10 @@ def main() -> None:
         merge_odds_into_feed(feed, odds.events_odds())
         if odds.requests_remaining:
             print(f"odds requests remaining: {odds.requests_remaining}")
+        from .snapshots import apply_market_xg
+        n = apply_market_xg(feed)
+        if n:
+            print(f"xg fitted to sharp no-vig prices for {n} matches")
 
     if args.props_csv:
         from .csvprops import load_props_csv, merge_props_into_feed

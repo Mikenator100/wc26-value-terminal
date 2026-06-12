@@ -114,9 +114,15 @@ exact feed JSON contract (the integration boundary between the two halves).
   expected goals, with the **Dixon-Coles low-score correction** (rho=-0.13;
   independent Poisson misprices draws). Every such market is derivable with no
   extra data.
-- **Form quality**: the xG fallback weights recent goals by **opponent Elo**
-  (`datalayer/elo.py`, baked June-2026 snapshot, `ELO_JSON` override) — 3-0
-  over El Salvador no longer reads like 3-0 over France.
+- **xG hierarchy** (strongest signal wins): (1) **market-implied** — when
+  Pinnacle has priced the match, `snapshots.implied_lambdas` inverts the
+  de-vigged 1X2+totals into the lambdas, so every derived market stays
+  coherent with the sharp line; (2) **Elo matchup anchor**
+  (`elo.elo_lambdas`: ~220 rating points ≈ 1 goal around a 2.6-goal total)
+  tilted ±18% by Elo-weighted recent form — raw form averages are never
+  used directly, qualifier blowouts vs minnows read like 4 goals/game even
+  after discounting; (3) season stats / form averages only for unrated teams.
+  Pre-fit estimates are kept as `xgModelHome/Away` in the feed.
 - **Same-game multis**: hit rate is the **joint** probability from the score matrix
   (correlation captured exactly) — never the product of leg odds. Player legs
   (to score / SOT / shots) are repriced in the conditional goal environment the

@@ -674,7 +674,8 @@ function suggestSGMs(match, matrix, targetCenter) {
 /* ---------- formatting ---------- */
 const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const signedPct = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
-const od = (x) => (isFinite(x) ? x.toFixed(2) : "—");
+// deep-tail fair prices are real maths but false precision — cap the display
+const od = (x) => (!isFinite(x) || x > 999 ? "999+" : x.toFixed(2));
 const edgeColor = (e) =>
   e > 0.03 ? "var(--val)" : e > 0.005 ? "var(--amber)" : "var(--neg)";
 

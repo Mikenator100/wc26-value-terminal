@@ -67,6 +67,10 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
             from .odds import TheOddsApiProvider, merge_odds_into_feed
             odds = TheOddsApiProvider(odds_key, cache=cache)
             merge_odds_into_feed(feed, odds.events_odds())
+            from .snapshots import apply_market_xg
+            n = apply_market_xg(feed)
+            if n:
+                print(f"xg fitted to sharp no-vig prices for {n} matches")
         except Exception as e:
             print(f"odds merge skipped: {e}")
 

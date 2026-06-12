@@ -90,6 +90,33 @@ def test_evaluate():
     print(f"evaluate ok (bets {rep['bets']}, pnl {rep['pnl']}, clv {home_bet['clv']:.3f})")
 
 
+def test_implied_lambdas_roundtrip():
+    from datalayer.snapshots import implied_lambdas
+    # price a known match (1.6 vs 1.0) with ~3% margin, then invert it back
+    true_lh, true_la = 1.6, 1.0
+    m = score_matrix(true_lh, true_la)
+    rp = result_probs(m)
+    p_over = total_over_prob(m, 2.5)
+    juice = lambda p: round(1 / (p * 1.03), 3)
+    markets = [
+        {"key": "1x2", "outcomes": [
+            {"label": "Home", "pinnacle": juice(rp["home"])},
+            {"label": "Draw", "pinnacle": juice(rp["draw"])},
+            {"label": "Away", "pinnacle": juice(rp["away"])},
+        ]},
+        {"key": "ou25", "outcomes": [
+            {"label": "Over 2.5", "pinnacle": juice(p_over)},
+            {"label": "Under 2.5", "pinnacle": juice(1 - p_over)},
+        ]},
+    ]
+    fit = implied_lambdas(markets)
+    assert fit is not None
+    assert abs(fit[0] - true_lh) < 0.15 and abs(fit[1] - true_la) < 0.15, fit
+    # no sharp prices -> no fit
+    assert implied_lambdas([{"key": "1x2", "outcomes": [{"label": "Home"}]}]) is None
+    print(f"implied lambdas ok (true {true_lh}/{true_la} -> fitted {fit[0]}/{fit[1]})")
+
+
 def test_power_devig():
     from datalayer.snapshots import _no_vig
     # 1.50 / 4.20 / 7.00 with ~5% margin: the power method should strip more
@@ -142,6 +169,7 @@ if __name__ == "__main__":
     test_dixon_coles()
     test_snapshot_rows()
     test_evaluate()
+    test_implied_lambdas_roundtrip()
     test_power_devig()
     test_paper_picks_settleable()
     test_push()

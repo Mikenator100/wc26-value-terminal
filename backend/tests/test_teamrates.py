@@ -143,9 +143,11 @@ def test_build_match_team_rates():
     tr = m["teamRates"]
     assert tr["home"]["corners"] == 7.0 and tr["away"]["corners"] == 3.0
     assert tr["home"]["_games"] == 2  # only the finished fixtures counted
-    # league-season stats are empty (0 played) -> xG falls back to recent-form
-    # goals, so the in-form home side prices clearly above the away side
-    assert m["xgHome"] > 2.0 > m["xgAway"]
+    # league-season stats are empty (0 played) -> xG anchors on the Elo
+    # matchup (both fake teams are rated), tilted by recent form: the in-form
+    # home side prices above the away side, but never blowout lambdas
+    assert m["xgHome"] > m["xgAway"]
+    assert 1.0 < m["xgHome"] < 2.2 and 0.5 < m["xgAway"] < 1.5
     # team_form=0 skips the calls entirely (and xG degrades to neutral)
     m0 = build_match(RatesProvider(), RatesProvider.FIXTURE, league=1, season=2026, team_form=0)
     assert "teamRates" not in m0
@@ -175,6 +177,22 @@ def test_recent_player_counts():
     assert counts[11][0]["sot"] == 2 and counts[11][1]["fouls"] == 2
     assert 12 not in counts                              # 0 minutes = didn't play
     print(f"recent player counts ok ({counts[11]})")
+
+
+def test_elo_lambdas():
+    from datalayer.elo import elo_lambdas, rating, load_table
+    table = load_table()
+    lh, la = elo_lambdas(rating("Brazil", table), rating("Morocco", table))
+    assert lh > la                              # better side scores more
+    assert abs((lh + la) - 2.6) < 1e-6          # neutral venue keeps the total
+    assert 1.0 < lh < 2.0 and 0.8 < la < 1.5    # sane, never blowout lambdas
+    # a huge rating gap stays bounded
+    bh, ba = elo_lambdas(2150, 1380)
+    assert bh <= 2.4 + 1e-9 and ba >= 0.25
+    # venue multiplier shifts, doesn't explode
+    vh, va = elo_lambdas(1800, 1800, venue_mult=1.08)
+    assert vh > 1.3 > va
+    print(f"elo lambdas ok (BRA-MAR {lh}/{la}, capped {bh}/{ba})")
 
 
 def test_elo_weighting():
@@ -255,6 +273,7 @@ if __name__ == "__main__":
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
     test_recent_player_counts()
+    test_elo_lambdas()
     test_elo_weighting()
     test_effective_country_weight()
     test_build_match_auto_lineups()
