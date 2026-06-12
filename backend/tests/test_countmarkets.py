@@ -37,7 +37,17 @@ def test_team_markets():
     assert "Corners O/U 9.5" in m and "Both teams to be carded" in m and "Red card in match" in m
     tmost = m["Corners — team with most"]
     assert tmost[0]["prob"] > tmost[1]["prob"]  # stronger home side wins corners more often
-    print(f"team markets ok ({len(m)} markets; corners O/U 9.5 over fair {m['Corners O/U 9.5'][0]['fair']})")
+
+    # derived counts: free kicks = fouls + offsides (+ extras) -> mu ~26.7,
+    # so Over 23.5 should be clearly likelier than Under
+    assert "Free kicks O/U 23.5" in m and "Goal kicks O/U 15.5" in m and "Throw-ins O/U 39.5" in m
+    fk = m["Free kicks O/U 23.5"]
+    assert fk[0]["prob"] > 0.6, fk
+    # off-target shots total 14.6 -> goal kicks mu ~13.8, Under 15.5 favoured
+    gk = m["Goal kicks O/U 15.5"]
+    assert gk[1]["prob"] > 0.5, gk
+    print(f"team markets ok ({len(m)} markets; corners O/U 9.5 over fair {m['Corners O/U 9.5'][0]['fair']}; "
+          f"FK over23.5 {fk[0]['prob']}, GK under15.5 {gk[1]['prob']})")
 
 
 def test_player_markets():

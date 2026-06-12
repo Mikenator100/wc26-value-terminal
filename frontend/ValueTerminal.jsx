@@ -729,7 +729,7 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
 
   // ---- team count markets (corners, cards, shots, SOT, offsides, tackles, fouls) ----
   if (teamRates) {
-    const R = teamRates, disp = { corners: 10, cards: 5, shots: 15, sot: 8, offsides: 4, tackles: 20, fouls: 25 };
+    const R = teamRates, disp = { corners: 10, cards: 5, shots: 15, sot: 8, offsides: 4, tackles: 20, fouls: 25, throwins: 18, freekicks: 14, goalkicks: 8 };
     // opponent strength via xG: attacking volume scales with own attack, while
     // discipline/defensive counts scale with how much the team must defend
     const BASE_G = 1.35;
@@ -761,6 +761,18 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
     ou("offsides", [2.5, 3.5, 4.5], "Offsides");
     ou("tackles", [15.5, 17.5], "Tackles");
     ou("fouls", [20.5, 22.5, 24.5], "Fouls");
+    // derived counts (mirrors the Python engine): free kicks = fouls +
+    // offsides by law (+ a few other infringements); goal kicks track
+    // off-target shots; throw-ins are a flat prior (no source, low variance)
+    const ouMu = (mu, key, lines, label) => {
+      const d = countDist(mu, disp[key]);
+      lines.forEach((l) => tm.push(mk(`${label} O/U ${l}`, [[`Over ${l}`, distOver(d, l)], [`Under ${l}`, 1 - distOver(d, l)]])));
+    };
+    ouMu(adjH("fouls") + adjA("fouls") + adjH("offsides") + adjA("offsides") + 1.5,
+      "freekicks", [23.5, 26.5, 29.5], "Free kicks");
+    ouMu(6.5 + 0.5 * Math.max(0, adjH("shots") - adjH("sot") + adjA("shots") - adjA("sot")),
+      "goalkicks", [13.5, 15.5, 17.5], "Goal kicks");
+    ouMu(40, "throwins", [36.5, 39.5, 42.5], "Throw-ins");
     groups.push({ group: "Team markets", markets: tm });
   }
 

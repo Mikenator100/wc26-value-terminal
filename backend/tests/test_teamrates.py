@@ -153,9 +153,49 @@ def test_build_match_team_rates():
           f"form xg {m['xgHome']}-{m['xgAway']})")
 
 
+class AutoLineupProvider(RatesProvider):
+    """RatesProvider + a roster and recent confirmed XIs for the home side."""
+
+    def team_players(self, team, season):
+        if team == 6:
+            return [{"player": {"id": 11, "name": "Star Forward"}},
+                    {"player": {"id": 12, "name": "Bench Guy"}}]
+        return []
+
+    def player_seasons(self, player_id, seasons):
+        return midfielder_blocks()
+
+    def lineups(self, fixture_id, ttl=300):
+        if fixture_id in (106, 107):  # home side's finished form fixtures
+            return [
+                {"team": {"id": 6, "name": "Brazil"}, "startXI": [
+                    # name spelled differently than the roster on purpose —
+                    # the id match must carry it
+                    {"player": {"id": 11, "name": "Forward Star", "pos": "F", "grid": "1:3"}},
+                ]},
+                {"team": {"id": 10, "name": "Morocco"}, "startXI": []},
+            ]
+        return []  # no confirmed XI for the upcoming fixture
+
+
+def test_build_match_auto_lineups():
+    m = build_match(AutoLineupProvider(), RatesProvider.FIXTURE, league=1, season=2026,
+                    auto_lineups=True)
+    star = next(p for p in m["players"] if p["name"] == "Star Forward")
+    bench = next(p for p in m["players"] if p["name"] == "Bench Guy")
+    assert star["startProb"] == 0.75      # started 2 of 2 recent -> (2+1)/(2+2)
+    assert star["predictedPos"] == "ST"   # central forward slot
+    assert bench["startProb"] == 0.25     # outside the predicted XI -> bench default
+    # without the flag, nobody is predicted and the generic default applies
+    m0 = build_match(AutoLineupProvider(), RatesProvider.FIXTURE, league=1, season=2026)
+    assert all(p["startProb"] == 0.7 for p in m0["players"])
+    print(f"auto lineups ok (starter {star['startProb']} {star['predictedPos']}, bench {bench['startProb']})")
+
+
 if __name__ == "__main__":
     test_team_rates()
     test_player_count_rates()
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
+    test_build_match_auto_lineups()
     print("\nALL TEAM-RATE TESTS PASSED\n")

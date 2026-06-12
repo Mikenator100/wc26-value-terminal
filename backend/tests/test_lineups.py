@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datalayer.lineups import (  # noqa: E402
     formation_to_roles,
     build_predicted_xi,
+    predicted_from_recent_xis,
+    name_key,
     ManualLineups,
     HtmlPredictedLineups,
 )
@@ -94,10 +96,51 @@ def test_html_parse():
     print("html parse ok; doubtful Paqueta startProb =", paqueta["startProb"])
 
 
+def _xi_payload(team_id, players):
+    """One fixtures/lineups response: [{team, formation, startXI}, opponent]."""
+    return [
+        {"team": {"id": team_id, "name": "Us"}, "formation": "4-2-3-1",
+         "startXI": [{"player": p} for p in players]},
+        {"team": {"id": 999, "name": "Them"}, "startXI": []},
+    ]
+
+
+def test_predicted_from_recent():
+    ever_present = {"id": 1, "name": "Heung-Min Son", "pos": "F", "grid": "4:1"}
+    rotation = {"id": 2, "name": "Rotation Mid", "pos": "M", "grid": "3:2"}
+    new_starter = {"id": 3, "name": "New Keeper", "pos": "G", "grid": "1:1"}
+    payloads = [
+        _xi_payload(17, [ever_present, new_starter]),   # newest match
+        _xi_payload(17, [ever_present, rotation]),
+        _xi_payload(17, [ever_present, rotation]),
+    ]
+    xi = predicted_from_recent_xis(17, payloads)
+    by_id = {p["id"]: p for p in xi}
+    # 3/3 starts -> (3+1)/(3+2) = 0.8; 2/3 -> 0.6; 1/3 -> 0.4
+    assert by_id[1]["startProb"] == 0.8 and by_id[2]["startProb"] == 0.6 and by_id[3]["startProb"] == 0.4
+    assert by_id[1]["pos"] == "W"      # F on the flank (grid col 1)
+    assert by_id[2]["pos"] == "CM"     # central midfielder
+    assert by_id[3]["pos"] == "GK"
+    assert xi[0]["id"] == 1            # sorted by startProb
+    # wrong team / empty payloads -> no XI
+    assert predicted_from_recent_xis(42, payloads) == []
+    assert predicted_from_recent_xis(17, []) == []
+    print(f"predicted-from-recent ok (probs {[p['startProb'] for p in xi]})")
+
+
+def test_name_key():
+    # lineup vs roster spellings of the same player must collide
+    assert name_key("Heung-Min Son") == name_key("Son Heung-Min")
+    assert name_key("Lionel Messi") != name_key("Lionel Scaloni")
+    print("name key ok")
+
+
 if __name__ == "__main__":
     test_formation_known()
     test_formation_fallback()
     test_build_xi_doubtful()
     test_manual_seed_dict()
     test_html_parse()
+    test_predicted_from_recent()
+    test_name_key()
     print("\nALL LINEUP TESTS PASSED")

@@ -132,9 +132,10 @@ class ApiFootballProvider:
         # schedule changes during a tournament; short TTL
         return self._get("fixtures", {"league": league, "season": season}, ttl=1800)
 
-    def lineups(self, fixture_id: int) -> list[dict]:
-        # lineups appear ~40 min before KO; cache briefly so we pick up the drop
-        return self._get("fixtures/lineups", {"fixture": fixture_id}, ttl=300)
+    def lineups(self, fixture_id: int, ttl: int = 300) -> list[dict]:
+        # lineups appear ~40 min before KO; cache briefly so we pick up the
+        # drop. Pass a long ttl for finished fixtures (they never change).
+        return self._get("fixtures/lineups", {"fixture": fixture_id}, ttl=ttl)
 
     def team_statistics(self, league: int, season: int, team: int) -> dict:
         res = self._get(

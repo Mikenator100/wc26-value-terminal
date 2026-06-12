@@ -36,13 +36,20 @@
   rates. Recent-form goal averages also back-fill xG while the tournament
   season has nothing to average. Verified live against WC2026 data.
 
+- **Derived count markets** — throw-ins / free kicks / goal kicks O/U in both
+  engines. No feed exposes these, so they're modelled from measured rates:
+  free kicks = fouls + offsides (+ a small extra, by the laws), goal kicks
+  track off-target shot volume, throw-ins are a flat documented prior.
+- **Predicted-lineup source** — `predicted_from_recent_xis` infers each XI from
+  the team's recent *confirmed* starting XIs (`--auto-lineups`; 1 cached call
+  per finished form fixture). startProb = smoothed share of recent starts;
+  players outside a predicted XI drop to a 0.25 bench default; manual
+  `xis.json` still wins; matching is by player id with order-insensitive name
+  fallback. The HTML-scraper seam remains for sites with team news.
+
 ## Next (in priority order)
 
-1. **Remaining count markets** — throw-ins, free kicks, goal kicks. Same NB engine,
-   just need the per-game rates.
-2. **Predicted-lineup source** — point `HtmlPredictedLineups` at a real predicted-XI
-   site (adapt selectors) or keep the manual `xis.json` path.
-3. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
+1. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
    move to Postgres if running multi-instance.
 
 ## Backlog / ideas

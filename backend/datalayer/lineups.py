@@ -2,11 +2,15 @@
 confirmed lineups.
 
 `build_match` already accepts a `predicted_lineups` dict of the form
-    {team_name: [{"name", "pos", "startProb"}]}
-so this module's only job is to produce that dict. Two sources:
+    {team_name: [{"name", "pos", "startProb", "id"?}]}
+so this module's only job is to produce that dict. Three sources:
 
+  - predicted_from_recent_xis: infer the XI from the team's recent *confirmed*
+    starting XIs (API-Football lineups of finished fixtures — data we already
+    fetch for the form window). ToS-clean and cacheable forever; the default
+    automatic path (`--auto-lineups`).
   - ManualLineups: you (or any feed) supply formation + starters as JSON. Fully
-    reliable — the recommended path.
+    reliable — overrides the automatic path.
   - HtmlPredictedLineups: a best-effort scraper seam for a predicted-XI site.
     Predicted-XI pages vary wildly and are ToS-grey, so the selectors are
     configurable and must be adapted to your chosen source; the reusable,
@@ -82,6 +86,77 @@ def _norm(s: str) -> str:
         return ""
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     return "".join(c for c in s.lower() if c.isalnum())
+
+
+def name_key(s: str) -> str:
+    """Order-insensitive name key: 'Son Heung-Min' == 'Heung-Min Son'.
+
+    Lineup payloads and roster payloads spell the same player differently;
+    sorting the normalised tokens makes the two findable.
+    """
+    if not s:
+        return ""
+    tokens = sorted(_norm(t) for t in s.replace("-", " ").split())
+    return " ".join(t for t in tokens if t)
+
+
+def _role_from_slot(pos_letter: str, grid: Optional[str]) -> str:
+    """Map a lineup slot (G/D/M/F + 'row:col' grid) to a role bucket."""
+    wide = False
+    if grid and ":" in grid:
+        try:
+            col = int(grid.split(":")[1])
+            wide = col in (1, 4, 5)
+        except ValueError:
+            pass
+    p = (pos_letter or "").upper()[:1]
+    if p == "G":
+        return "GK"
+    if p == "D":
+        return "FB" if wide else "CB"
+    if p == "M":
+        return "W" if wide else "CM"
+    if p == "F":
+        return "W" if wide else "ST"
+    return "CM"
+
+
+def predicted_from_recent_xis(
+    team_id: int,
+    lineups_payloads: list[list[dict]],
+    max_prob: float = 0.92,
+) -> list[dict]:
+    """Infer a predicted XI from a team's recent confirmed starting XIs.
+
+    `lineups_payloads`: one fixtures/lineups response per recent finished
+    match, newest first. startProb = add-one-smoothed share of recent starts,
+    so an ever-present starter lands ~0.8-0.9 and a rotation player ~0.4-0.6.
+    Position comes from the most recent slot the player filled.
+    """
+    starts: dict[int, dict] = {}  # player id -> {name, pos, count}
+    n = 0
+    for payload in lineups_payloads:
+        block = next((b for b in payload or [] if (b.get("team") or {}).get("id") == team_id), None)
+        if not block:
+            continue
+        n += 1
+        for slot in block.get("startXI", []):
+            p = slot.get("player") or {}
+            pid, pname = p.get("id"), p.get("name")
+            if not pid or not pname:
+                continue
+            if pid not in starts:  # payloads are newest first: keep latest slot
+                starts[pid] = {"name": pname, "pos": _role_from_slot(p.get("pos"), p.get("grid")), "count": 0}
+            starts[pid]["count"] += 1
+    if not n:
+        return []
+    xi = [
+        {"id": pid, "name": s["name"], "pos": s["pos"],
+         "startProb": round(min(max_prob, (s["count"] + 1) / (n + 2)), 2)}
+        for pid, s in starts.items()
+    ]
+    xi.sort(key=lambda r: -r["startProb"])
+    return xi
 
 
 class PredictedLineupProvider(Protocol):

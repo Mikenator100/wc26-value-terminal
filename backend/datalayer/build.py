@@ -22,6 +22,7 @@ from typing import Optional
 from .providers import ApiFootballProvider, FileCache, Provider
 from .normalize import build_player_profile, team_lambdas
 from .teamrates import team_rates, form_goal_averages, FINISHED
+from .lineups import predicted_from_recent_xis, name_key
 
 # seasons to aggregate the country split over (international samples are small)
 COUNTRY_SEASONS = [2023, 2024, 2025, 2026]
@@ -96,11 +97,14 @@ def build_match(
     squad_limit: int = 8,
     predicted_lineups: Optional[dict] = None,
     team_form: int = 5,
+    auto_lineups: bool = False,
 ) -> dict:
     """Build one match object. `predicted_lineups` is an optional external feed:
     {team_name: [{name, pos, startProb}]} from a predicted-XI source.
     `team_form` = recent finished fixtures per team used for count rates
-    (corners/cards/shots); 0 skips those API calls."""
+    (corners/cards/shots); 0 skips those API calls. `auto_lineups` infers a
+    predicted XI from each team's recent confirmed XIs (1 extra call per
+    finished form fixture, cached long); manual `predicted_lineups` win."""
     meta = _fixture_meta(fixture)
 
     # --- recent form window (shared by count rates + the xG fallback) ---- #
@@ -138,6 +142,27 @@ def build_match(
     except Exception:
         pass
 
+    # --- predicted XIs from recent confirmed lineups ---------------------- #
+    auto_pred: dict[str, list[dict]] = {}
+    if auto_lineups and team_form:
+        for side, tid, tname in (("home", meta["homeId"], meta["home"]),
+                                 ("away", meta["awayId"], meta["away"])):
+            if predicted_lineups and tname in predicted_lineups:
+                continue  # a manual XI always wins
+            payloads = []
+            for fx in recent[side]:
+                status = ((fx.get("fixture") or {}).get("status") or {}).get("short")
+                fid = (fx.get("fixture") or {}).get("id")
+                if status not in FINISHED or not fid:
+                    continue
+                try:
+                    payloads.append(provider.lineups(int(fid), ttl=30 * 86400))
+                except Exception:
+                    continue
+            xi = predicted_from_recent_xis(tid, payloads)
+            if xi:
+                auto_pred[tname] = xi
+
     # --- players --------------------------------------------------------- #
     players: list[dict] = []
     for team_name, team_id in ((meta["home"], meta["homeId"]), (meta["away"], meta["awayId"])):
@@ -145,8 +170,12 @@ def build_match(
             roster = provider.team_players(team_id, season)[:squad_limit]
         except Exception:
             roster = []
-        pred = (predicted_lineups or {}).get(team_name, [])
-        pred_by_name = {p["name"]: p for p in pred}
+        pred = (predicted_lineups or {}).get(team_name) or auto_pred.get(team_name) or []
+        pred_by_id = {p["id"]: p for p in pred if p.get("id")}
+        pred_by_name = {name_key(p["name"]): p for p in pred}
+        # when an XI is predicted, players outside it are bench material —
+        # don't hand them the generic 0.7
+        default_sp = 0.25 if pred else 0.7
 
         for entry in roster:
             pid = entry.get("player", {}).get("id")
@@ -158,13 +187,13 @@ def build_match(
             except Exception:
                 continue
 
-            pinfo = pred_by_name.get(pname, {})
+            pinfo = pred_by_id.get(pid) or pred_by_name.get(name_key(pname), {})
             profile = build_player_profile(
                 player_name=pname,
                 national_team_name=team_name,
                 stat_blocks=blocks,
                 predicted_pos=pinfo.get("pos"),
-                predicted_start_prob=pinfo.get("startProb", 0.7),
+                predicted_start_prob=pinfo.get("startProb", default_sp),
             )
             if not profile:
                 continue
@@ -209,6 +238,7 @@ def build_feed(
     predicted_lineups: Optional[dict] = None,
     team_form: int = 5,
     squad_limit: int = 8,
+    auto_lineups: bool = False,
 ) -> list[dict]:
     fixtures = provider.fixtures(league, season)
     if only_upcoming:
@@ -217,7 +247,8 @@ def build_feed(
     if max_matches:
         fixtures = fixtures[:max_matches]
     return [build_match(provider, f, league, season, squad_limit=squad_limit,
-                        predicted_lineups=predicted_lineups, team_form=team_form)
+                        predicted_lineups=predicted_lineups, team_form=team_form,
+                        auto_lineups=auto_lineups)
             for f in fixtures]
 
 
@@ -234,6 +265,8 @@ def main() -> None:
                     help="recent finished fixtures per team for count rates; 0 disables (saves ~12 calls/match uncached)")
     ap.add_argument("--squad-limit", type=int, default=8,
                     help="players per team (each costs ~4 API calls uncached)")
+    ap.add_argument("--auto-lineups", action="store_true",
+                    help="infer predicted XIs from recent confirmed lineups (1 call per finished form fixture, cached a month)")
     ap.add_argument("--out", default="feed.json")
     args = ap.parse_args()
 
@@ -246,7 +279,7 @@ def main() -> None:
     provider = ApiFootballProvider(args.key, mode=args.mode, cache=FileCache())
     feed = build_feed(provider, args.league, args.season, max_matches=args.max_matches,
                       predicted_lineups=predicted, team_form=args.team_form,
-                      squad_limit=args.squad_limit)
+                      squad_limit=args.squad_limit, auto_lineups=args.auto_lineups)
 
     if args.odds_key:
         from .odds import TheOddsApiProvider, merge_odds_into_feed

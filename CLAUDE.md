@@ -48,8 +48,9 @@ pip install -r requirements.txt
 
 # build the feed (stats only)
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --league 1 --season 2026 --max-matches 8 --out feed.json
-# + live Bet365/Pinnacle odds and predicted lineups
-python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --lineups-json xis.json --out feed.json
+# + live Bet365/Pinnacle odds and predicted lineups (inferred from recent XIs;
+#   --lineups-json xis.json supplies manual XIs that win over the inference)
+python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups --out feed.json
 
 # run the API (persistent ledger + feed + auto-settle)
 gunicorn 'datalayer.service:app'            # :8000

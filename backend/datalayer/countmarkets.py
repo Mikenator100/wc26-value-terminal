@@ -16,7 +16,18 @@ from typing import Optional
 
 # default dispersion (r) by metric — smaller = fatter tail
 DISP = {"corners": 10, "cards": 5, "shots": 15, "sot": 8, "offsides": 4,
-        "tackles": 20, "fouls": 25, "passes": 25, "saves": 6}
+        "tackles": 20, "fouls": 25, "passes": 25, "saves": 6,
+        "throwins": 18, "freekicks": 14, "goalkicks": 8}
+
+# throw-ins: no data source exposes them and team variance is small —
+# a flat per-match prior is the honest model (≈40 total per game)
+THROWINS_TOTAL = 40.0
+# goal kicks: awarded when attackers put the ball over the goal line, so they
+# track off-target shot volume on top of a routine baseline
+GOALKICKS_BASE, GOALKICKS_PER_OFFTARGET = 6.5, 0.5
+# free kicks: one per foul and per offside by law, plus a few other
+# infringements (handballs, obstruction)
+FREEKICKS_EXTRA = 1.5
 
 
 def count_dist(mu: float, r: Optional[float] = None, max_k: int = 80) -> list[float]:
@@ -83,6 +94,20 @@ def team_markets(rates: dict) -> dict:
     ou("offsides", [2.5, 3.5, 4.5], "Offsides")
     ou("tackles", [15.5, 17.5], "Tackles")
     ou("fouls", [20.5, 22.5, 24.5], "Fouls")
+
+    # derived count markets — no direct feed, modelled from the rates above
+    def ou_mu(mu, key, lines, label):
+        d = count_dist(mu, DISP[key])
+        for l in lines:
+            o = over(d, l)
+            out[f"{label} O/U {l}"] = _fair([(f"Over {l}", o), (f"Under {l}", 1 - o)])
+
+    fk_mu = h["fouls"] + a["fouls"] + h["offsides"] + a["offsides"] + FREEKICKS_EXTRA
+    ou_mu(fk_mu, "freekicks", [23.5, 26.5, 29.5], "Free kicks")
+    off_target = (h["shots"] - h["sot"]) + (a["shots"] - a["sot"])
+    gk_mu = GOALKICKS_BASE + GOALKICKS_PER_OFFTARGET * max(0.0, off_target)
+    ou_mu(gk_mu, "goalkicks", [13.5, 15.5, 17.5], "Goal kicks")
+    ou_mu(THROWINS_TOTAL, "throwins", [36.5, 39.5, 42.5], "Throw-ins")
     return out
 
 
