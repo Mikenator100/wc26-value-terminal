@@ -1179,12 +1179,63 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                        conf: pl.csvOnly ? SRC_CONF.ghost : SRC_CONF.player });
       })
     );
-    // rank by GRADE, not raw edge: risk-adjusted, confidence-weighted
-    return picks
-      .map((o) => ({ ...o, ...betScore(o.bet365, o.hitRate, o.edge, o.conf) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 6);
+    return picks.map((o) => ({ ...o, ...betScore(o.bet365, o.hitRate, o.edge, o.conf) }));
   }, [bestBets, catalog, catBook, base, players, playerBook]);
+
+  // two views of the same pool: grade-ranked (risk-adjusted, confidence-
+  // weighted) and raw-edge-ranked (highest edge regardless of variance)
+  const gradedPicks = useMemo(
+    () => [...valuePicks].sort((a, b) => b.score - a.score).slice(0, 6), [valuePicks]);
+  const rawValuePicks = useMemo(
+    () => [...valuePicks].sort((a, b) => b.edge - a.edge).slice(0, 6), [valuePicks]);
+
+  // shared card renderer for both best-bets boards
+  const renderPicks = (picks) =>
+    picks.length === 0 ? (
+      <div className="vt-empty">
+        Nothing prices above fair right now. Lower the model weight or wait
+        for the line to move.
+      </div>
+    ) : (
+      <div className="vt-bestrow">
+        {picks.map((o, i) => (
+          <div className="vt-card" key={i}>
+            <div className="vt-cardmkt" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>{o.src === "Player" ? "Player prop" : o.market}{o.src === "Player" ? ` · ${o.market}` : ""}</span>
+              <b className="vt-gradechip" style={{ color: gradeColor(o.grade) }}>{o.grade}</b>
+            </div>
+            <div className="vt-cardlabel">{o.label}</div>
+            <div className="vt-cardodds">{od(o.bet365)}</div>
+            <div className="vt-cardrow">
+              <span>Hit rate</span>
+              <b>{pct(o.hitRate)}</b>
+            </div>
+            <div className="vt-cardrow">
+              <span>Edge</span>
+              <b style={{ color: edgeColor(o.edge) }}>{signedPct(o.edge)}</b>
+            </div>
+            <div className="vt-cardstake">
+              stake ${(o.kellyFull * kellyFrac * stake).toFixed(2)}
+            </div>
+            <button
+              className="vt-logbtn"
+              onClick={() =>
+                onLog({
+                  fixture: `${base.home} v ${base.away}`,
+                  market: o.market,
+                  selection: o.label,
+                  modelProb: o.hitRate,
+                  price: o.bet365,
+                  stake: +(o.kellyFull * kellyFrac * stake).toFixed(2),
+                })
+              }
+            >
+              + Log bet
+            </button>
+          </div>
+        ))}
+      </div>
+    );
 
   // safest legs: high-but-useful hit-rate anchors for multi building (60-88%
   // — fair odds ~1.15-1.65, enough to actually move a multi's price). Graded
@@ -1207,8 +1258,16 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
         })
       )
     );
-    return legs.sort((a, b) => b.score - a.score || b.hitRate - a.hitRate).slice(0, 5);
-  }, [markets, catalog, catBook, base]);
+    players.filter((p) => p.inXI).forEach((pl) =>
+      pl.props.forEach((pr) => {
+        const raw = playerBook[`${pl.name}|${pr.name}`];
+        const price = Number(raw !== undefined ? raw : pl.bookOdds?.[pr.name]) || null;
+        add(`${pl.name}`, pr.name, pr.hitRate, price,
+            pl.csvOnly ? SRC_CONF.ghost : SRC_CONF.player);
+      })
+    );
+    return legs.sort((a, b) => b.score - a.score || b.hitRate - a.hitRate).slice(0, 6);
+  }, [markets, catalog, catBook, base, players, playerBook]);
   const suggestions = useMemo(
     () => suggestSGMs(base, matrix, target),
     [base, matrix, target]
@@ -1341,53 +1400,17 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                 ranked by grade: risk-adjusted edge + confidence + hit comfort · stake = {Math.round(kellyFrac * 100)}% Kelly
               </span>
             </div>
-            {valuePicks.length === 0 ? (
-              <div className="vt-empty">
-                Nothing prices above fair right now. Lower the model weight or
-                wait for the line to move.
-              </div>
-            ) : (
-              <div className="vt-bestrow">
-                {valuePicks.map((o, i) => (
-                  <div className="vt-card" key={i}>
-                    <div className="vt-cardmkt" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span>{o.src === "Player" ? "Player prop" : o.market}{o.src === "Player" ? ` · ${o.market}` : ""}</span>
-                      <b className="vt-gradechip" style={{ color: gradeColor(o.grade) }}>{o.grade}</b>
-                    </div>
-                    <div className="vt-cardlabel">{o.label}</div>
-                    <div className="vt-cardodds">{od(o.bet365)}</div>
-                    <div className="vt-cardrow">
-                      <span>Hit rate</span>
-                      <b>{pct(o.hitRate)}</b>
-                    </div>
-                    <div className="vt-cardrow">
-                      <span>Edge</span>
-                      <b style={{ color: edgeColor(o.edge) }}>
-                        {signedPct(o.edge)}
-                      </b>
-                    </div>
-                    <div className="vt-cardstake">
-                      stake ${(o.kellyFull * kellyFrac * stake).toFixed(2)}
-                    </div>
-                    <button
-                      className="vt-logbtn"
-                      onClick={() =>
-                        onLog({
-                          fixture: `${base.home} v ${base.away}`,
-                          market: o.market,
-                          selection: o.label,
-                          modelProb: o.hitRate,
-                          price: o.bet365,
-                          stake: +(o.kellyFull * kellyFrac * stake).toFixed(2),
-                        })
-                      }
-                    >
-                      + Log bet
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            {renderPicks(gradedPicks)}
+          </section>
+
+          <section className="vt-best">
+            <div className="vt-besthead">
+              <span>Best value — raw edge</span>
+              <span className="vt-bestnote">
+                highest edge regardless of variance · longshots live here, handle with care
+              </span>
+            </div>
+            {renderPicks(rawValuePicks)}
           </section>
 
           {/* market tables */}
