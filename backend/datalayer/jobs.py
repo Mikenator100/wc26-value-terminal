@@ -67,6 +67,15 @@ def run_cycle() -> int:
         except Exception as e:
             print(f"odds merge skipped: {e}")
 
+    props_csv = os.environ.get("PROPS_CSV")
+    if props_csv and os.path.exists(props_csv):
+        try:
+            from .csvprops import load_props_csv, merge_props_into_feed
+            n = merge_props_into_feed(feed, load_props_csv(props_csv))
+            print(f"props csv: prices attached to {n} players")
+        except Exception as e:
+            print(f"props csv skipped: {e}")
+
     tmp = feed_path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(feed, f)

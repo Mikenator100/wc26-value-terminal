@@ -183,32 +183,38 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
     return countryWeight * nv + (1 - countryWeight) * cv;
   };
 
-  let expGoals = blend("goals") * startProb * attackF;
-  let expSot = blend("sot") * startProb * attackF;
-  let expShots = blend("shots") * startProb * attackF;
-  let expAssists = blend("assists") * startProb * attackF;
-  const expPasses = measured("passes") * startProb * Math.sqrt(attackF);
-  const expTackles = measured("tackles") * startProb * defenceF;
-  const expFouls = measured("fouls") * startProb * defenceF;
-  const expFouled = measured("fouled") * startProb * attackF;
-  const expSaves = measured("saves") * startProb;
+  // void-aware exposure (mirrors the Python engine): book props void when the
+  // player takes no part, so fair prices are conditional on appearing — a
+  // non-starter who does appear plays sub minutes (~0.35 of a match). Raw
+  // startProb would systematically underprice every prop against the book.
+  const expo = startProb <= 0 ? 0 : startProb + (1 - startProb) * 0.35;
+
+  let expGoals = blend("goals") * expo * attackF;
+  let expSot = blend("sot") * expo * attackF;
+  let expShots = blend("shots") * expo * attackF;
+  let expAssists = blend("assists") * expo * attackF;
+  const expPasses = measured("passes") * expo * Math.sqrt(attackF);
+  const expTackles = measured("tackles") * expo * defenceF;
+  const expFouls = measured("fouls") * expo * defenceF;
+  const expFouled = measured("fouled") * expo * attackF;
+  const expSaves = measured("saves") * expo;
   const cardFactor = Math.sqrt(ROLE[pos].cards / ROLE[p.clubRole].cards);
   let cardP =
     (countryWeight * p.country.cards + (1 - countryWeight) * p.club.cards) *
-    cardFactor * defenceF * startProb;
+    cardFactor * defenceF * expo;
 
   // set-piece duty: penalties and direct free kicks add to the taker's numbers
-  const pPen = clamp(0.18 * attackF, 0.05, 0.4) * startProb; // chance team wins a pen
+  const pPen = clamp(0.18 * attackF, 0.05, 0.4) * expo; // chance team wins a pen
   if (p.pen) {
     expGoals += pPen * 0.76; // ~76% conversion
     expSot += pPen;
     expShots += pPen;
   }
   if (p.fk) {
-    expShots += 0.4 * startProb;
-    expSot += 0.15 * startProb;
-    expGoals += 0.03 * startProb;
-    expAssists += 0.06 * startProb;
+    expShots += 0.4 * expo;
+    expSot += 0.15 * expo;
+    expGoals += 0.03 * expo;
+    expAssists += 0.06 * expo;
   }
 
   const mk = (name, prob) => {
@@ -231,10 +237,15 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
       mk("To score or assist", 1 - Math.exp(-(expGoals + expAssists))),
       mk("Shots 1+", atLeast(1, expShots, 8)),
       mk("Shots 2+", atLeast(2, expShots, 8)),
+      mk("Shots 3+", atLeast(3, expShots, 8)),
       mk("Shots on target 1+", atLeast(1, expSot, 6)),
       mk("Shots on target 2+", atLeast(2, expSot, 6)),
+      mk("Shots on target 3+", atLeast(3, expSot, 6)),
+      mk("Tackles 1+", atLeast(1, expTackles, 10)),
       mk("Tackles 2+", atLeast(2, expTackles, 10)),
+      mk("Tackles 3+", atLeast(3, expTackles, 10)),
       mk("Fouls committed 1+", atLeast(1, expFouls, 12)),
+      mk("Fouls committed 2+", atLeast(2, expFouls, 12)),
       mk(`Passes over ${passLine}`, distOver(countDist(expPasses, 25), passLine)),
       mk("To be fouled 1+", atLeast(1, expFouled, 10)),
       mk("To be booked", cardP),
@@ -1304,7 +1315,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                       {p.props.map((pr) => {
                         const key = `${p.name}|${pr.name}`;
                         const raw = playerBook[key];
-                        const bookOdds = raw && Number(raw) > 1 ? Number(raw) : null;
+                        // feed-supplied slip price (props CSV) unless typed over
+                        const fromFeed = p.bookOdds?.[pr.name];
+                        const shown = raw !== undefined ? raw : fromFeed ?? "";
+                        const bookOdds = shown && Number(shown) > 1 ? Number(shown) : null;
                         const e = bookOdds ? bookOdds * pr.hitRate - 1 : null;
                         return (
                           <div className="vt-prow" key={pr.name}>
@@ -1317,7 +1331,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                 type="number"
                                 step="0.05"
                                 placeholder="—"
-                                value={raw || ""}
+                                value={shown}
                                 onChange={(ev) =>
                                   setPlayerBook((b) => ({
                                     ...b,

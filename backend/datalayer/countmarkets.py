@@ -128,11 +128,14 @@ def player_markets(exp: dict) -> dict:
     mk("Anytime goalscorer", 1 - math.exp(-g))
     mk("To score or assist", 1 - math.exp(-(g + asst)))
     dsh = count_dist(exp.get("shots", 0), DISP["shots"])
-    mk("Shots 1+", at_least(dsh, 1)); mk("Shots 2+", at_least(dsh, 2))
+    mk("Shots 1+", at_least(dsh, 1)); mk("Shots 2+", at_least(dsh, 2)); mk("Shots 3+", at_least(dsh, 3))
     dso = count_dist(exp.get("sot", 0), DISP["sot"])
     mk("Shots on target 1+", at_least(dso, 1)); mk("Shots on target 2+", at_least(dso, 2))
-    mk("Tackles 2+", at_least(count_dist(exp.get("tackles", 0), DISP["tackles"]), 2))
-    mk("Fouls committed 1+", at_least(count_dist(exp.get("fouls", 0), DISP["fouls"]), 1))
+    mk("Shots on target 3+", at_least(dso, 3))
+    dtk = count_dist(exp.get("tackles", 0), DISP["tackles"])
+    mk("Tackles 1+", at_least(dtk, 1)); mk("Tackles 2+", at_least(dtk, 2)); mk("Tackles 3+", at_least(dtk, 3))
+    dfo = count_dist(exp.get("fouls", 0), DISP["fouls"])
+    mk("Fouls committed 1+", at_least(dfo, 1)); mk("Fouls committed 2+", at_least(dfo, 2))
     pl = max(4.5, round(exp.get("passes", 0) / 5) * 5 - 0.5)
     mk(f"Passes over {pl}", over(count_dist(exp.get("passes", 0), DISP["passes"]), pl))
     mk("To be fouled 1+", at_least(count_dist(exp.get("fouled", 0), 10), 1))
@@ -159,6 +162,10 @@ def _clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 
+# minutes a non-starter plays *when he does appear* (sub ~30'), as a share of 90
+_SUB_MINUTES_SHARE = 0.35
+
+
 def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: float,
                         opp_xg: float, set_pieces: Optional[dict] = None,
                         country_weight: float = 0.6) -> dict:
@@ -166,9 +173,16 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
 
     Attacking output scales with the team's xG (opponent defence is baked into
     team_xg); defensive/discipline output scales with opponent attack (opp_xg).
+
+    Exposure is void-aware: bookmaker player props are voided when the player
+    takes no part, so the fair price is conditional on appearing. A predicted
+    starter plays the full match; if he doesn't start but appears, it's sub
+    minutes — multiplying raw start_prob in would systematically underprice
+    every prop against the book.
     """
     attack = _clamp(team_xg / _BASE_G, 0.6, 1.7)
     defend = _clamp(opp_xg / _BASE_G, 0.6, 1.7)
+    start_prob = 0.0 if start_prob <= 0 else start_prob + (1 - start_prob) * _SUB_MINUTES_SHARE
     sp = set_pieces or {}
     club, country = profile.get("club", {}), profile.get("country", {})
 

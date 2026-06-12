@@ -267,6 +267,8 @@ def main() -> None:
                     help="players per team (each costs ~4 API calls uncached)")
     ap.add_argument("--auto-lineups", action="store_true",
                     help="infer predicted XIs from recent confirmed lineups (1 call per finished form fixture, cached a month)")
+    ap.add_argument("--props-csv", default=None,
+                    help="hand-collected Bet365 player-prop CSV; prices attach to players as bookOdds")
     ap.add_argument("--out", default="feed.json")
     args = ap.parse_args()
 
@@ -287,6 +289,11 @@ def main() -> None:
         merge_odds_into_feed(feed, odds.events_odds())
         if odds.requests_remaining:
             print(f"odds requests remaining: {odds.requests_remaining}")
+
+    if args.props_csv:
+        from .csvprops import load_props_csv, merge_props_into_feed
+        n = merge_props_into_feed(feed, load_props_csv(args.props_csv))
+        print(f"props csv: prices attached to {n} players")
 
     with open(args.out, "w") as f:
         json.dump(feed, f, indent=2)
