@@ -77,9 +77,14 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
     props_csv = os.environ.get("PROPS_CSV")
     if props_csv and os.path.exists(props_csv):
         try:
-            from .csvprops import load_props_csv, merge_props_into_feed
-            n = merge_props_into_feed(feed, load_props_csv(props_csv))
-            print(f"props csv: prices attached to {n} players")
+            from .csvbook import is_structured, load_structured, merge_structured_into_feed
+            if is_structured(props_csv):
+                st = merge_structured_into_feed(feed, load_structured(props_csv))
+                print(f"book csv: {st}")
+            else:
+                from .csvprops import load_props_csv, merge_props_into_feed
+                n = merge_props_into_feed(feed, load_props_csv(props_csv))
+                print(f"props csv: prices attached to {n} players")
         except Exception as e:
             print(f"props csv skipped: {e}")
 

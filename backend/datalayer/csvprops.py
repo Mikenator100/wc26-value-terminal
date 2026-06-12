@@ -51,7 +51,8 @@ def load_props_csv(path: str) -> dict[str, dict[str, float]]:
 
 
 def _initials_match(a: str, b: str) -> bool:
-    """'m sadilek' matches 'michal sadilek' — single-letter tokens are initials."""
+    """'m sadilek' matches 'michal sadilek' (initials), and 'johnston' matches
+    'johnstone' (slip typos: long-token prefix)."""
     ta, tb = a.split(), b.split()
     if len(ta) != len(tb):
         return False
@@ -63,6 +64,9 @@ def _initials_match(a: str, b: str) -> bool:
         if len(x) == 1 and y.startswith(x):
             continue
         if len(y) == 1 and x.startswith(y):
+            continue
+        if min(len(x), len(y)) >= 5 and (x.startswith(y) or y.startswith(x)):
+            anchor = True
             continue
         return False
     return anchor

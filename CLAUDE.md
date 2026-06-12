@@ -50,9 +50,13 @@ pip install -r requirements.txt
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --league 1 --season 2026 --max-matches 8 --out feed.json
 # + live Bet365/Pinnacle odds, predicted lineups (inferred from recent XIs;
 #   --lineups-json xis.json supplies manual XIs that win), and hand-collected
-#   Bet365 prop prices from a CSV (backend/props/)
+#   Bet365 prices from a CSV (backend/props/). Two CSV formats, auto-sniffed:
+#   ladder-style player props (csvprops.py) or the full structured one-match
+#   export (csvbook.py: every player + match markets like alternative totals,
+#   3-way corners, ranges, combos -> player bookOdds + match bookPrices;
+#   slip players missing from the API roster get placeholder profiles)
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups \
-  --props-csv props/bet365_worldcup_master_props.csv --out feed.json
+  --squad-limit 26 --props-csv props/bet365_structured_markets.csv --out feed.json
 
 # run the API (persistent ledger + feed + auto-settle); set STATIC_DIR to the
 # built frontend (frontend/dist) to serve the terminal from the same origin

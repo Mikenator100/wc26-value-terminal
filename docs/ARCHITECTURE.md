@@ -48,6 +48,8 @@
     { "key": "ou25", "name": "Total goals — Over/Under 2.5", "outcomes": [ "..." ] },
     { "key": "btts", "name": "Both teams to score",         "outcomes": [ "..." ] }
   ],
+  "bookPrices": { "Corners 3-way 9|Over 9": 2.10 },  // structured slip CSV ->
+                                                     // catalog input prefill
   "players": [
     { "name": "Raphinha", "team": "Brazil",
       "clubRole": "W", "countryRole": "W",

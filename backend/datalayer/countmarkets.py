@@ -133,20 +133,37 @@ def player_markets(exp: dict) -> dict:
 
     g, asst = exp.get("goals", 0), exp.get("assists", 0)
     mk("Anytime goalscorer", 1 - math.exp(-g))
+    mk("To assist", 1 - math.exp(-asst))
     mk("To score or assist", 1 - math.exp(-(g + asst)))
+
+    # first/last goalscorer: the player's share of his team's goals times the
+    # chance his team scores the first (resp. last) goal — by symmetry the two
+    # probabilities match, which is also how books price them
+    tx, ox = exp.get("_team_xg") or 1.3, exp.get("_opp_xg") or 1.3
+    share = min(0.9, g / tx) if tx else 0.0
+    p_team_first = tx / (tx + ox) * (1 - math.exp(-(tx + ox)))
+    mk("First goalscorer", share * p_team_first)
+    mk("Last goalscorer", share * p_team_first)
+
     dsh = count_dist(exp.get("shots", 0), PDISP["shots"])
-    mk("Shots 1+", at_least(dsh, 1)); mk("Shots 2+", at_least(dsh, 2)); mk("Shots 3+", at_least(dsh, 3))
+    for n in range(1, 7):
+        mk(f"Shots {n}+", at_least(dsh, n))
     dso = count_dist(exp.get("sot", 0), PDISP["sot"])
-    mk("Shots on target 1+", at_least(dso, 1)); mk("Shots on target 2+", at_least(dso, 2))
-    mk("Shots on target 3+", at_least(dso, 3))
+    for n in range(1, 5):
+        mk(f"Shots on target {n}+", at_least(dso, n))
     dtk = count_dist(exp.get("tackles", 0), PDISP["tackles"])
     mk("Tackles 1+", at_least(dtk, 1)); mk("Tackles 2+", at_least(dtk, 2)); mk("Tackles 3+", at_least(dtk, 3))
     dfo = count_dist(exp.get("fouls", 0), PDISP["fouls"])
-    mk("Fouls committed 1+", at_least(dfo, 1)); mk("Fouls committed 2+", at_least(dfo, 2))
+    for n in range(1, 6):
+        mk(f"Fouls committed {n}+", at_least(dfo, n))
     pl = max(4.5, round(exp.get("passes", 0) / 5) * 5 - 0.5)
     mk(f"Passes over {pl}", over(count_dist(exp.get("passes", 0), PDISP["passes"]), pl))
-    mk("To be fouled 1+", at_least(count_dist(exp.get("fouled", 0), PDISP["fouled"]), 1))
+    dfd = count_dist(exp.get("fouled", 0), PDISP["fouled"])
+    for n in range(1, 5):
+        mk(f"To be fouled {n}+", at_least(dfd, n))
     mk("To be booked", exp.get("card_prob", 0.1))
+    # red cards run ~10-15% of bookings at this level
+    mk("To be sent off", min(0.08, exp.get("card_prob", 0.1) * 0.12))
     return out
 
 
@@ -252,6 +269,8 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         "fouled": grounded("fouled", measured("fouled")) * start_prob * attack,
         "card_prob": blend("cards", 0.1) * defend * start_prob,
         "is_gk": pos == "GK",
+        "_team_xg": team_xg,  # carried for first/last-goalscorer pricing
+        "_opp_xg": opp_xg,
     }
     if pos == "GK":
         exp["saves"] = grounded("saves", measured("saves")) * start_prob

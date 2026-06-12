@@ -36,11 +36,12 @@ services:
       - key: TEAM_FORM
         value: "5"               # form window; also the depth of the L5 strips
       - key: SQUAD_LIMIT
-        value: "8"
+        value: "40"              # the players list isn't squad-ordered; go deep
+                                 # so every slip player matches real data
       - key: AUTO_LINEUPS
         value: "1"
       - key: PROPS_CSV
-        value: /app/props/bet365_worldcup_master_props.csv
+        value: /app/props/bet365_structured_markets.csv
       - key: CACHE_DIR
         value: /data/.cache
       - key: KEEP_AWAKE

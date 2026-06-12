@@ -276,23 +276,25 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
     ];
   } else {
     const passLine = Math.max(4.5, Math.round(expPasses / 5) * 5 - 0.5);
+    // first/last goalscorer (mirrors the Python engine): the player's share
+    // of his team's goals times P(his team scores first) — symmetric, which
+    // is also how books price first vs last
+    const tx = ctx.teamXg ?? BASE_G, ox = ctx.oppXg ?? BASE_G;
+    const pFirst = Math.min(0.9, tx > 0 ? expGoals / tx : 0) * (tx / (tx + ox)) * (1 - Math.exp(-(tx + ox)));
     props = [
       mk("Anytime goalscorer", 1 - Math.exp(-expGoals)),
+      mk("To assist", 1 - Math.exp(-expAssists)),
       mk("To score or assist", 1 - Math.exp(-(expGoals + expAssists))),
-      mk("Shots 1+", atLeast(1, expShots, PD.shots)),
-      mk("Shots 2+", atLeast(2, expShots, PD.shots)),
-      mk("Shots 3+", atLeast(3, expShots, PD.shots)),
-      mk("Shots on target 1+", atLeast(1, expSot, PD.sot)),
-      mk("Shots on target 2+", atLeast(2, expSot, PD.sot)),
-      mk("Shots on target 3+", atLeast(3, expSot, PD.sot)),
-      mk("Tackles 1+", atLeast(1, expTackles, PD.tackles)),
-      mk("Tackles 2+", atLeast(2, expTackles, PD.tackles)),
-      mk("Tackles 3+", atLeast(3, expTackles, PD.tackles)),
-      mk("Fouls committed 1+", atLeast(1, expFouls, PD.fouls)),
-      mk("Fouls committed 2+", atLeast(2, expFouls, PD.fouls)),
+      mk("First goalscorer", pFirst),
+      mk("Last goalscorer", pFirst),
+      ...[1, 2, 3, 4, 5, 6].map((n) => mk(`Shots ${n}+`, atLeast(n, expShots, PD.shots))),
+      ...[1, 2, 3, 4].map((n) => mk(`Shots on target ${n}+`, atLeast(n, expSot, PD.sot))),
+      ...[1, 2, 3].map((n) => mk(`Tackles ${n}+`, atLeast(n, expTackles, PD.tackles))),
+      ...[1, 2, 3, 4, 5].map((n) => mk(`Fouls committed ${n}+`, atLeast(n, expFouls, PD.fouls))),
       mk(`Passes over ${passLine}`, distOver(countDist(expPasses, PD.passes), passLine)),
-      mk("To be fouled 1+", atLeast(1, expFouled, PD.fouled)),
+      ...[1, 2, 3, 4].map((n) => mk(`To be fouled ${n}+`, atLeast(n, expFouled, PD.fouled))),
       mk("To be booked", cardP),
+      mk("To be sent off", Math.min(0.08, cardP * 0.12)),
     ];
   }
   return {
@@ -305,11 +307,12 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
 // collapsible market families inside a player card; statKey links a family to
 // the feed's last-5 per-match counts (shots/sot/tackles/fouls only)
 const PROP_FAMILIES = [
-  { name: "Scoring", match: (n) => n === "Anytime goalscorer" || n === "To score or assist" },
+  { name: "Scoring", match: (n) => ["Anytime goalscorer", "To assist", "To score or assist", "First goalscorer", "Last goalscorer"].includes(n) },
   { name: "Shots", match: (n) => /^Shots \d/.test(n), statKey: "shots" },
   { name: "Shots on target", match: (n) => n.startsWith("Shots on target"), statKey: "sot" },
   { name: "Tackles", match: (n) => n.startsWith("Tackles"), statKey: "tackles" },
   { name: "Fouls committed", match: (n) => n.startsWith("Fouls committed"), statKey: "fouls" },
+  { name: "To be fouled", match: (n) => n.startsWith("To be fouled") },
   { name: "Saves", match: (n) => n.startsWith("Saves") },
   { name: "Other", match: () => true },
 ];
@@ -752,9 +755,12 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
     mk("Double chance", [["Home or draw", P((i, j) => i >= j)], ["Home or away", P((i, j) => i !== j)], ["Draw or away", P((i, j) => i <= j)]]),
     mk("Draw no bet", [["Home", rH / (rH + rA)], ["Away", rA / (rH + rA)]]),
     mk("Result + BTTS", [
-      ["Home & BTTS", P((i, j) => i > j && i >= 1 && j >= 1)],
-      ["Draw & BTTS", P((i, j) => i === j && i >= 1)],
-      ["Away & BTTS", P((i, j) => i < j && i >= 1 && j >= 1)],
+      ["Home & Yes", P((i, j) => i > j && i >= 1 && j >= 1)],
+      ["Home & No", P((i, j) => i > j && j === 0)],
+      ["Draw & Yes", P((i, j) => i === j && i >= 1)],
+      ["Draw & No", P((i, j) => i === 0 && j === 0)],
+      ["Away & Yes", P((i, j) => i < j && i >= 1 && j >= 1)],
+      ["Away & No", P((i, j) => i < j && i === 0)],
     ]),
     mk("Result / Over 2.5", [
       ["Home & Over", P((i, j) => i > j && i + j > 2.5)],
@@ -766,9 +772,25 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
       ["Draw & Under", P((i, j) => i === j && i + j < 2.5)],
       ["Away & Under", P((i, j) => i < j && i + j < 2.5)],
     ]),
+    mk("Result + goals 2-4", [
+      ["Home & Yes", P((i, j) => i > j && i + j >= 2 && i + j <= 4)],
+      ["Home & No", P((i, j) => i > j && (i + j < 2 || i + j > 4))],
+      ["Draw & Yes", P((i, j) => i === j && i + j >= 2 && i + j <= 4)],
+      ["Draw & No", P((i, j) => i === j && (i + j < 2 || i + j > 4))],
+      ["Away & Yes", P((i, j) => i < j && i + j >= 2 && i + j <= 4)],
+      ["Away & No", P((i, j) => i < j && (i + j < 2 || i + j > 4))],
+    ]),
+    mk("Double chance + goals 2-4", [
+      ["Home or draw & Yes", P((i, j) => i >= j && i + j >= 2 && i + j <= 4)],
+      ["Home or draw & No", P((i, j) => i >= j && (i + j < 2 || i + j > 4))],
+      ["Home or away & Yes", P((i, j) => i !== j && i + j >= 2 && i + j <= 4)],
+      ["Home or away & No", P((i, j) => i !== j && (i + j < 2 || i + j > 4))],
+      ["Draw or away & Yes", P((i, j) => i <= j && i + j >= 2 && i + j <= 4)],
+      ["Draw or away & No", P((i, j) => i <= j && (i + j < 2 || i + j > 4))],
+    ]),
   ];
 
-  const lines = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5];
+  const lines = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
   const goals = [
     ...lines.map((l) => mk(`Over/Under ${l}`, [[`Over ${l}`, P((i, j) => i + j > l)], [`Under ${l}`, P((i, j) => i + j < l)]])),
     mk("Both teams to score", [["Yes", P((i, j) => i >= 1 && j >= 1)], ["No", P((i, j) => i < 1 || j < 1)]]),
@@ -782,6 +804,16 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
     mk("Goals range", [
       ["0-1", P((i, j) => i + j <= 1)], ["2-3", P((i, j) => i + j === 2 || i + j === 3)],
       ["4-6", P((i, j) => i + j >= 4 && i + j <= 6)], ["7+", P((i, j) => i + j >= 7)],
+    ]),
+    mk("Goals 2-4", [
+      ["Yes", P((i, j) => i + j >= 2 && i + j <= 4)],
+      ["No", P((i, j) => i + j < 2 || i + j > 4)],
+    ]),
+    mk("Home goals 2-4", [
+      ["Yes", P((i) => i >= 2 && i <= 4)], ["No", P((i) => i < 2 || i > 4)],
+    ]),
+    mk("Away goals 2-4", [
+      ["Yes", P((_i, j) => j >= 2 && j <= 4)], ["No", P((_i, j) => j < 2 || j > 4)],
     ]),
     mk("Teams to score", [
       ["Both", P((i, j) => i >= 1 && j >= 1)], ["Home only", P((i, j) => i >= 1 && j === 0)],
@@ -852,6 +884,10 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
       ["Home / Draw", htft["H/D"] || 0], ["Draw / Draw", htft["D/D"] || 0], ["Away / Draw", htft["A/D"] || 0],
       ["Home / Away", htft["H/A"] || 0], ["Draw / Away", htft["D/A"] || 0], ["Away / Away", htft["A/A"] || 0],
     ], "approx"),
+    mk("2nd half goals 2-4", [
+      ["Yes", probOf(Mh2, (i, j) => i + j >= 2 && i + j <= 4)],
+      ["No", probOf(Mh2, (i, j) => i + j < 2 || i + j > 4)],
+    ], "approx"),
   ];
 
   const groups = [
@@ -882,6 +918,15 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
       tm.push(mk(`${label} — team with most`, [["Home", home], ["Away", away], ["Tie", tie]]));
     };
     ou("corners", [8.5, 9.5, 10.5, 11.5], "Corners");
+    // Bet365's corner ladder uses whole lines with a 3-way Over/Exactly/Under
+    const dCorners = total("corners");
+    [4, 5, 6, 7, 8, 9, 10].forEach((n) => {
+      const exactly = dCorners[n] || 0;
+      const overN = distOver(dCorners, n + 0.5);
+      tm.push(mk(`Corners 3-way ${n}`, [
+        [`Over ${n}`, overN], [`Exactly ${n}`, exactly], [`Under ${n}`, Math.max(0, 1 - overN - exactly)],
+      ]));
+    });
     most("corners", "Corners");
     ou("cards", [2.5, 3.5, 4.5], "Cards");
     const dhc = countDist(adjH("cards"), disp.cards), dac = countDist(adjA("cards"), disp.cards);
@@ -1613,7 +1658,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                               {m.outcomes.map((o) => {
                                 const key = `${g.group}|${m.name}|${o.label}`;
                                 const raw = catBook[key];
-                                const book = raw && Number(raw) > 1 ? Number(raw) : null;
+                                // slip price from the structured CSV unless typed over
+                                const fromFeed = base.bookPrices?.[`${m.name}|${o.label}`];
+                                const shown = raw !== undefined ? raw : fromFeed ?? "";
+                                const book = shown && Number(shown) > 1 ? Number(shown) : null;
                                 const e = book ? book * o.prob - 1 : null;
                                 return (
                                   <div className="cat-row" key={o.label}>
@@ -1625,7 +1673,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                       type="number"
                                       step="0.05"
                                       placeholder="—"
-                                      value={raw || ""}
+                                      value={shown}
                                       onChange={(ev) => setCatBook((b) => ({ ...b, [key]: ev.target.value }))}
                                     />
                                     <span className="vt-num" style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}>

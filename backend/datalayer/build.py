@@ -359,9 +359,14 @@ def main() -> None:
             print(f"xg fitted to sharp no-vig prices for {n} matches")
 
     if args.props_csv:
-        from .csvprops import load_props_csv, merge_props_into_feed
-        n = merge_props_into_feed(feed, load_props_csv(args.props_csv))
-        print(f"props csv: prices attached to {n} players")
+        from .csvbook import is_structured, load_structured, merge_structured_into_feed
+        if is_structured(args.props_csv):
+            st = merge_structured_into_feed(feed, load_structured(args.props_csv))
+            print(f"book csv: {st}")
+        else:
+            from .csvprops import load_props_csv, merge_props_into_feed
+            n = merge_props_into_feed(feed, load_props_csv(args.props_csv))
+            print(f"props csv: prices attached to {n} players")
 
     with open(args.out, "w") as f:
         json.dump(feed, f, indent=2)
