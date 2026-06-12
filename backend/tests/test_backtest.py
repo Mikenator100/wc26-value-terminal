@@ -90,6 +90,23 @@ def test_evaluate():
     print(f"evaluate ok (bets {rep['bets']}, pnl {rep['pnl']}, clv {home_bet['clv']:.3f})")
 
 
+def test_power_devig():
+    from datalayer.snapshots import _no_vig
+    # 1.50 / 4.20 / 7.00 with ~5% margin: the power method should strip more
+    # implied probability from the longshot than proportional division does
+    prices = [1.50, 4.20, 7.00]
+    nv = _no_vig(prices)
+    assert abs(sum(nv) - 1) < 1e-9
+    raw = [1 / p for p in prices]
+    s = sum(raw)
+    proportional = [x / s for x in raw]
+    assert nv[2] < proportional[2]          # longshot devigged harder
+    assert nv[0] > proportional[0]          # favourite keeps more probability
+    # missing outcome / no-margin input falls back to plain rescale
+    assert _no_vig([2.0, None])[1] is None
+    print(f"power devig ok (longshot {nv[2]:.4f} < proportional {proportional[2]:.4f})")
+
+
 def test_paper_picks_settleable():
     rows = snapshot_feed([_feed_match(b365_home=2.6, pin_home=2.5)], ts=1.0)
     picks = pick_paper_bets(rows, weight=0.3, threshold=0.02)
@@ -125,6 +142,7 @@ if __name__ == "__main__":
     test_dixon_coles()
     test_snapshot_rows()
     test_evaluate()
+    test_power_devig()
     test_paper_picks_settleable()
     test_push()
     print("\nALL BACKTEST TESTS PASSED\n")

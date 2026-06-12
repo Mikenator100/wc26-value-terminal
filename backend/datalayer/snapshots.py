@@ -62,11 +62,28 @@ def btts_prob(m: list[list[float]]) -> float:
 
 
 def _no_vig(prices: list[Optional[float]]) -> list[Optional[float]]:
+    """Power-method de-vig (mirrors the JSX noVigProbs): raise implied probs
+    to k >= 1 until they sum to 1, so the margin lands on the longshots where
+    books park it — proportional division overstates longshot probabilities."""
     inv = [(1 / p) if p and p > 1 else None for p in prices]
-    s = sum(x for x in inv if x)
+    present = [x for x in inv if x]
+    s = sum(present)
     if not s:
         return [None] * len(prices)
-    return [(x / s) if x else None for x in inv]
+    if s <= 1 or len(present) != len(inv):
+        # arbitrage-looking input, or a missing outcome: plain rescale
+        return [(x / s) if x else None for x in inv]
+    lo, hi = 1.0, 5.0
+    for _ in range(60):
+        k = (lo + hi) / 2
+        if sum(x ** k for x in present) > 1:
+            lo = k
+        else:
+            hi = k
+    k = (lo + hi) / 2
+    adj = [x ** k for x in inv]
+    s2 = sum(adj)
+    return [x / s2 for x in adj]
 
 
 def _parse_line(label: str) -> Optional[float]:

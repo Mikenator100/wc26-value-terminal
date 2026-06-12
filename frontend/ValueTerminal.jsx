@@ -99,10 +99,22 @@ function probOf(matrix, pred) {
   return s;
 }
 
+// strip the bookmaker margin. Proportional division spreads the vig evenly,
+// which overstates longshots (the favourite-longshot bias); the power method
+// (raise implied probs to k>=1 so they sum to 1) pushes the margin onto the
+// outcomes where books actually park it. Mirrors datalayer/snapshots.py.
 function noVigProbs(oddsArr) {
   const raw = oddsArr.map(impliedProb);
   const sum = raw.reduce((a, b) => a + b, 0);
-  return raw.map((p) => p / sum);
+  if (sum <= 1) return raw.map((p) => p / sum); // arb/odd input: plain rescale
+  let lo = 1, hi = 5;
+  for (let it = 0; it < 60; it++) {
+    const k = (lo + hi) / 2;
+    raw.reduce((a, p) => a + Math.pow(p, k), 0) > 1 ? (lo = k) : (hi = k);
+  }
+  const adj = raw.map((p) => Math.pow(p, (lo + hi) / 2));
+  const s = adj.reduce((a, b) => a + b, 0);
+  return adj.map((p) => p / s);
 }
 const margin = (oddsArr) =>
   oddsArr.map(impliedProb).reduce((a, b) => a + b, 0) - 1;
@@ -873,6 +885,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [lineupStatus, setLineupStatus] = useState("predicted");
   const [playerCW, setPlayerCW] = useState(0.6); // country weight for props
   const [playerBook, setPlayerBook] = useState({}); // "name|market" -> odds
+  const [openPlayers, setOpenPlayers] = useState({}); // name -> expanded card
   const players = useMemo(
     () =>
       base.players.map((p) => {
@@ -1384,10 +1397,15 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
             <div className="vt-plrgrid">
               {players
                 .filter((p) => p.inXI)
-                .map((p) => (
+                .map((p) => {
+                  const open = !!openPlayers[p.name];
+                  return (
                   <div className="vt-plrcard" key={p.name}>
-                    <div className="vt-plrhead">
-                      <div>
+                    <button
+                      className="vt-plrhead vt-plrhead--toggle"
+                      onClick={() => setOpenPlayers((s) => ({ ...s, [p.name]: !open }))}
+                    >
+                      <div style={{ textAlign: "left" }}>
                         <div className="vt-plrname">{p.name}</div>
                         <div className="vt-plrmeta">
                           {p.team} · {Math.round(p.startProb * 100)}% to start
@@ -1400,8 +1418,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                           {p.pos}
                           {p.posChanged && <i> ← {p.predictedPos}</i>}
                         </span>
+                        <span className="cat-gcount">{open ? "−" : "+"}</span>
                       </div>
-                    </div>
+                    </button>
+                    {open && (
                     <div className="vt-proptable">
                       <div className="vt-prow vt-prow--head">
                         <span>Market</span>
@@ -1448,15 +1468,18 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                         );
                       })}
                     </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
             </div>
             <p className="vt-sgmnote">
               Rates are role-adjusted to each player's match position and blended
-              across club and country form. Switch to Confirmed XI when the team
-              sheets drop — start probabilities lock and anyone in a new position
-              re-prices (Rodrygo moves to striker here). Paste the Bet365 prop
-              price to read the edge.
+              across club and country form (weighted by each source's sample
+              size). Click a player to expand their props. Switch to Confirmed
+              XI when the team sheets drop — start probabilities lock and anyone
+              in a new position re-prices. Prices prefill from the props CSV;
+              type over them to read edge against a fresher slip.
             </p>
           </section>
 
@@ -1487,6 +1510,13 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                               {m.note && <i className="cat-note"> {m.note}</i>}
                             </div>
                             <div className="cat-table">
+                              <div className="cat-row cat-row--head">
+                                <span>Outcome</span>
+                                <span className="vt-num">Hit</span>
+                                <span className="vt-num">Fair</span>
+                                <span className="vt-num">Bet365</span>
+                                <span className="vt-num">Edge</span>
+                              </div>
                               {m.outcomes.map((o) => {
                                 const key = `${g.group}|${m.name}|${o.label}`;
                                 const raw = catBook[key];
@@ -2165,6 +2195,8 @@ const CSS = `
 .cat-mname{font-size:12px;font-weight:600;color:var(--bone);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;}
 .cat-note{color:var(--amber);font-style:normal;font-size:10px;font-weight:500;}
 .cat-table{display:flex;flex-direction:column;}
+.cat-row--head{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
+.cat-row--head .vt-num{font-family:'Space Grotesk',sans-serif;font-size:9px;}
 .cat-row{display:grid;grid-template-columns:1.4fr .7fr .7fr .85fr .8fr;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);}
 .cat-row:last-child{border-bottom:none;}
 .cat-olabel{font-size:13px;}
@@ -2288,6 +2320,8 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-plrgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:13px;}
 .vt-plrcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;}
 .vt-plrhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px;}
+.vt-plrhead--toggle{width:100%;background:none;border:none;color:var(--bone);padding:0;cursor:pointer;font-family:inherit;}
+.vt-plrhead--toggle:hover .vt-plrname{color:var(--val);}
 .vt-plrname{font-weight:600;font-size:15px;}
 .vt-plrmeta{color:var(--muted);font-size:11px;margin-top:2px;}
 .vt-poschip{background:var(--panelHi);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px;font-weight:600;font-family:'JetBrains Mono',monospace;}

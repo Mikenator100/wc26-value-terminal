@@ -216,13 +216,18 @@ def team_lambdas(
     home_stats: dict,
     away_stats: dict,
     comp_avg_goals: float = 1.35,
-    home_adv: float = 1.05,
+    home_adv: float = 1.0,
     predictions: Optional[dict] = None,
 ) -> tuple[float, float]:
     """Dixon-Coles-style expected goals for each side.
 
     Prefers the provider's own predicted goals when available, otherwise builds
     from attack/defence strength relative to the competition average.
+
+    `home_adv` defaults to 1.0 — a World Cup is played at neutral venues, so
+    "home" is just the fixture's first team. Pass >1 when the nominal home
+    side genuinely has the crowd (host nations; club football would use ~1.05),
+    or <1 when the *away* side is the host.
     """
     if predictions:
         pg_home = _safe(predictions, "predictions", "goals", "home")

@@ -27,6 +27,21 @@ from .lineups import predicted_from_recent_xis, name_key
 # seasons to aggregate the country split over (international samples are small)
 COUNTRY_SEASONS = [2023, 2024, 2025, 2026]
 
+# WC2026 is at neutral venues — no home advantage — except for the three host
+# nations, who really do get the crowd (~ the usual venue edge on goals)
+HOSTS = {"usa", "united states", "mexico", "canada"}
+HOST_ADV = 1.08
+
+
+def _venue_advantage(home_name: str, away_name: str) -> float:
+    h = (home_name or "").lower() in HOSTS
+    a = (away_name or "").lower() in HOSTS
+    if h and not a:
+        return HOST_ADV
+    if a and not h:
+        return 1 / HOST_ADV
+    return 1.0
+
 
 def _fixture_meta(fx: dict) -> dict:
     status = (fx.get("fixture", {}).get("status", {}) or {}).get("short", "NS")
@@ -137,7 +152,9 @@ def build_match(
         preds = provider.predictions(int(meta["id"]))
     except Exception:
         pass
-    xg_home, xg_away = team_lambdas(hs, as_, predictions=preds)
+    xg_home, xg_away = team_lambdas(
+        hs, as_, predictions=preds,
+        home_adv=_venue_advantage(meta["home"], meta["away"]))
 
     # --- confirmed lineup (if released) --------------------------------- #
     confirmed = {}

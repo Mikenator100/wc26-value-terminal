@@ -145,6 +145,12 @@ exact feed JSON contract (the integration boundary between the two halves).
 
 - **"Fair odds" = sharp no-vig (Pinnacle) blended with the model.** Value = Bet365
   price above fair. Pinnacle/Betfair are the truth proxy, not Bet365's own line.
+  De-vigging uses the **power method** (margin lands on longshots, where books
+  park it) — proportional division overstates longshot probabilities. Both
+  engines (JSX `noVigProbs`, `snapshots._no_vig`) stay in sync.
+- **Neutral venue**: `team_lambdas` applies no home advantage by default (it's
+  a World Cup) — except host-nation matches (USA/Mexico/Canada get ~1.08 on
+  goals via `build._venue_advantage`).
 - **Profitability and CLV are the objective, never hit rate.** A high hit rate at
   short odds is usually a losing bet. The recommender optimises expected value;
   performance reports P&L/ROI/CLV first.
