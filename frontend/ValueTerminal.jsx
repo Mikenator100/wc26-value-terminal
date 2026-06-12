@@ -1882,9 +1882,16 @@ export default function App() {
 
   useEffect(() => {
     let dead = false;
-    fetchFeed()
-      .then((feed) => { if (!dead) { setMatches(feed); setLiveFeed(true); } })
-      .catch(() => {}); // keep the sample preview
+    // a cold-started host may still be building its first feed (the instance
+    // sleeps when idle and rebuilds on wake) — keep retrying for ~6 minutes
+    // so the page flips from sample to live without a manual refresh
+    let tries = 0;
+    const loadFeed = () => {
+      fetchFeed()
+        .then((feed) => { if (!dead) { setMatches(feed); setLiveFeed(true); } })
+        .catch(() => { if (!dead && tries++ < 12) setTimeout(loadFeed, 30000); });
+    };
+    loadFeed();
     fetch(`${API_BASE}/api/bets`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((bets) => { if (!dead) setLedger(bets.map(fromServerBet)); })

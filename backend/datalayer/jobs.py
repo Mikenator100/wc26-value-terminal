@@ -42,7 +42,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def run_cycle() -> int:
+def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) -> int:
     key = os.environ["API_FOOTBALL_KEY"]
     odds_key = os.environ.get("ODDS_API_KEY") or os.environ.get("THE_ODDS_API_KEY")
     feed_path = os.environ.get("FEED_PATH", "feed.json")
@@ -58,8 +58,8 @@ def run_cycle() -> int:
         season=_env_int("SEASON", 2026),
         max_matches=_env_int("MAX_MATCHES", 8),
         team_form=_env_int("TEAM_FORM", 3),
-        squad_limit=_env_int("SQUAD_LIMIT", 8),
-        auto_lineups=bool(_env_int("AUTO_LINEUPS", 1)),
+        squad_limit=squad_limit if squad_limit is not None else _env_int("SQUAD_LIMIT", 8),
+        auto_lineups=bool(_env_int("AUTO_LINEUPS", 1)) if auto_lineups is None else auto_lineups,
     )
 
     if odds_key:
@@ -122,16 +122,28 @@ def _settle() -> None:
         print(f"auto-settle skipped: {e}")
 
 
-def main() -> None:
+def run_loop() -> None:
+    """The scheduler. Ephemeral hosts (Render free) boot with no feed file and
+    a cold API cache, and a full build takes minutes — so the first pass skips
+    player squads (the expensive part) to get a usable feed up in ~a minute,
+    then the full cycle runs immediately after."""
     interval = _env_int("FEED_INTERVAL", 1800)
+    first = True
     while True:
         try:
+            if first and _env_int("FAST_FIRST_CYCLE", 1):
+                run_cycle(squad_limit=0, auto_lineups=False)
             run_cycle()
         except Exception as e:
             print(f"cycle failed: {e}")
+        first = False
         if os.environ.get("RUN_ONCE"):
             break
         time.sleep(interval)
+
+
+def main() -> None:
+    run_loop()
 
 
 if __name__ == "__main__":

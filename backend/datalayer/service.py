@@ -150,22 +150,12 @@ app = create_app(
 
 def _start_feed_thread() -> None:
     """In-process scheduler for single-container hosts (Render free tier has
-    no background workers). Runs the same cycle as `python -m datalayer.jobs`."""
+    no background workers). Same loop as `python -m datalayer.jobs`, including
+    the fast first pass that gets a feed up quickly after a cold start."""
     import threading
-    import time as _time
-    from .jobs import run_cycle
+    from .jobs import run_loop
 
-    interval = int(os.environ.get("FEED_INTERVAL", "1800") or 1800)
-
-    def loop():
-        while True:
-            try:
-                run_cycle()
-            except Exception as e:
-                print(f"feed cycle failed: {e}")
-            _time.sleep(interval)
-
-    threading.Thread(target=loop, daemon=True, name="feedjob").start()
+    threading.Thread(target=run_loop, daemon=True, name="feedjob").start()
 
 
 if os.environ.get("ENABLE_FEED_JOB") and os.environ.get("API_FOOTBALL_KEY"):
