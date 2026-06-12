@@ -82,6 +82,18 @@ def run_cycle() -> int:
     os.replace(tmp, feed_path)  # atomic: the service never sees a partial feed
     print(f"wrote {len(feed)} matches -> {feed_path}")
 
+    # record an odds/model snapshot per cycle — the backtest's data source
+    # (the last snapshot before kickoff doubles as the closing line)
+    history = os.environ.get(
+        "HISTORY_PATH", os.path.join(os.path.dirname(feed_path) or ".", "history.jsonl"))
+    try:
+        from .snapshots import append_snapshots
+        n = append_snapshots(history, feed)
+        if n:
+            print(f"snapshot: {n} outcomes -> {history}")
+    except Exception as e:
+        print(f"snapshot skipped: {e}")
+
     _settle()
     return len(feed)
 
