@@ -243,17 +243,25 @@ Endpoints:
 ## Run locally
 ```bash
 pip install -r requirements.txt
-python -m datalayer.build --key $API_FOOTBALL_KEY --odds-key $ODDS_API_KEY --out feed.json
+python -m datalayer.build --key $API_FOOTBALL_KEY --odds-key $ODDS_API_KEY --auto-lineups --out feed.json
 gunicorn 'datalayer.service:app'        # serves on :8000
+# set STATIC_DIR=../frontend/dist (after `npm run build` there) to serve the
+# terminal from the same origin as the API
+# scheduled loop (feed rebuild + auto-settle; env-configured, RUN_ONCE=1 for cron):
+python -m datalayer.jobs
 ```
 
-## Docker (persistent volume + scheduled feed + auto-settle)
+## Docker (terminal + API + scheduled feed + persistent volume)
 ```bash
-API_FOOTBALL_KEY=... ODDS_API_KEY=... docker compose up --build
+docker compose up --build               # keys read from ../.env
 ```
-The `feedjob` container rebuilds the feed every 10 min and POSTs to
-`/api/settle/auto`, which reads finished-fixture results, resolves each open bet,
-settles it, and records the closing price so CLV is captured automatically.
+The image is multi-stage: node builds `frontend/dist`, the python image serves
+it at `/` next to the API. The `feedjob` container rebuilds the feed every
+`FEED_INTERVAL` (default 30 min, atomic write, API cache on the volume) and
+POSTs to `/api/settle/auto`, which reads finished-fixture results, resolves
+each open bet, settles it, and records the closing price so CLV is captured
+automatically. Budget knobs: `MAX_MATCHES`, `TEAM_FORM`, `SQUAD_LIMIT`,
+`AUTO_LINEUPS` (see `datalayer/jobs.py`).
 
 Hosting: any container host works (Fly.io, Render, Railway, a small VPS). Keep
 the volume attached for the ledger. For serverless/multi-instance, swap SQLite

@@ -1,25 +1,41 @@
+# Run from backend/:  docker compose up --build
+# Reads API keys from ../.env (API_FOOTBALL_KEY, ODDS_API_KEY).
+# Terminal + API on http://localhost:8000 — ledger, feed, and the API-call
+# cache all persist on the `ledger` volume.
+
 services:
   api:
-    build: .
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     ports: ["8000:8000"]
+    env_file: ../.env
     environment:
-      - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
-      - ODDS_API_KEY=${ODDS_API_KEY}
       - LEDGER_DB=/data/bets.db
       - FEED_PATH=/data/feed.json
     volumes:
-      - ledger:/data        # SQLite ledger + feed persist here
-  # rebuilds the feed (stats + odds + lineups) on a schedule, and auto-settles
+      - ledger:/data
+
+  # rebuilds the feed on a schedule and triggers auto-settlement through the
+  # api service (single SQLite writer). All knobs are env vars — see
+  # datalayer/jobs.py; defaults are free-API-budget safe.
   feedjob:
-    build: .
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "datalayer.jobs"]
+    env_file: ../.env
     environment:
-      - API_FOOTBALL_KEY=${API_FOOTBALL_KEY}
-      - ODDS_API_KEY=${ODDS_API_KEY}
+      - FEED_PATH=/data/feed.json
+      - CACHE_DIR=/data/.cache
+      - SERVICE_URL=http://api:8000
+      - FEED_INTERVAL=1800
+      - MAX_MATCHES=8
+      - TEAM_FORM=3
+      - AUTO_LINEUPS=1
     volumes:
       - ledger:/data
-    entrypoint: ["sh", "-c", "while true; do \
-        python -m datalayer.build --key $$API_FOOTBALL_KEY --odds-key $$ODDS_API_KEY --out /data/feed.json; \
-        curl -s -X POST http://api:8000/api/settle/auto || true; \
-        sleep 600; done"]
+    depends_on: [api]
+
 volumes:
   ledger:

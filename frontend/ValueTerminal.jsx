@@ -403,13 +403,15 @@ const SAMPLE_MATCHES = [
 ];
 
 /* ---------- live data wiring ---------- */
-// Where datalayer.service runs (feed + persistent ledger). Empty string
-// expects a feed.json served next to the app instead. Either way the terminal
+// Where datalayer.service runs (feed + persistent ledger). Empty string =
+// same origin: the deployed service serves the built app itself, and the
+// vite dev server proxies /api to localhost:8000 (vite.config.js). Point it
+// at a host only when the app is hosted away from the service. The terminal
 // falls back to SAMPLE_MATCHES when nothing answers, so the preview always renders.
-const API_BASE = "http://localhost:8000";
+const API_BASE = "";
 
 async function fetchFeed() {
-  const r = await fetch(API_BASE ? `${API_BASE}/api/feed` : "feed.json");
+  const r = await fetch(`${API_BASE}/api/feed`);
   if (!r.ok) throw new Error(`feed ${r.status}`);
   const feed = await r.json();
   if (!Array.isArray(feed) || !feed.length) throw new Error("empty feed");
@@ -1869,16 +1871,14 @@ export default function App() {
     fetchFeed()
       .then((feed) => { if (!dead) { setMatches(feed); setLiveFeed(true); } })
       .catch(() => {}); // keep the sample preview
-    if (API_BASE) {
-      fetch(`${API_BASE}/api/bets`)
-        .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((bets) => { if (!dead) setLedger(bets.map(fromServerBet)); })
-        .catch(() => {});
-      fetch(`${API_BASE}/api/performance`)
-        .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((p) => { if (!dead) setPerf(p); })
-        .catch(() => {});
-    }
+    fetch(`${API_BASE}/api/bets`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((bets) => { if (!dead) setLedger(bets.map(fromServerBet)); })
+      .catch(() => {});
+    fetch(`${API_BASE}/api/performance`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((p) => { if (!dead) setPerf(p); })
+      .catch(() => {});
     return () => { dead = true; };
   }, []);
 
@@ -1888,21 +1888,19 @@ export default function App() {
       ...l,
       { ...b, id: localId, ts: Date.now(), status: "open", closing: null, pnl: null },
     ]);
-    if (API_BASE) {
-      fetch(`${API_BASE}/api/bets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          match_id: b.fixture, market: b.market, selection: b.selection,
-          model_prob: b.modelProb, price: b.price, stake: b.stake,
-        }),
-      })
-        .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then(({ id }) =>
-          setLedger((l) => l.map((x) => (x.id === localId ? { ...x, serverId: id } : x)))
-        )
-        .catch(() => {});
-    }
+    fetch(`${API_BASE}/api/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        match_id: b.fixture, market: b.market, selection: b.selection,
+        model_prob: b.modelProb, price: b.price, stake: b.stake,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then(({ id }) =>
+        setLedger((l) => l.map((x) => (x.id === localId ? { ...x, serverId: id } : x)))
+      )
+      .catch(() => {});
   };
   const settleBet = (id, result) => {
     const bet = ledger.find((b) => b.id === id);
@@ -1918,7 +1916,7 @@ export default function App() {
           : b
       )
     );
-    if (API_BASE && bet?.serverId) {
+    if (bet?.serverId) {
       fetch(`${API_BASE}/api/bets/${bet.serverId}/settle`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

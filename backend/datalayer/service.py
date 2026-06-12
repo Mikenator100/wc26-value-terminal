@@ -21,9 +21,25 @@ from flask import Flask, jsonify, request, send_file
 from .betlog import Ledger, performance, fit_calibrator, segment_stats, calibration_table
 
 
-def create_app(db_path: str = "bets.db", feed_path: str = "feed.json") -> Flask:
+def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
+               static_dir: str = "") -> Flask:
     app = Flask(__name__)
     ledger = Ledger(db_path)
+
+    # serve the built terminal (frontend/dist) when present — one origin for
+    # app + API, so a deploy is a single container
+    sd = os.path.abspath(static_dir) if static_dir else ""
+    if sd and os.path.isdir(sd):
+        @app.get("/")
+        def index():
+            return send_file(os.path.join(sd, "index.html"))
+
+        @app.get("/<path:asset>")
+        def assets(asset):
+            full = os.path.normpath(os.path.join(sd, asset))
+            if full.startswith(sd + os.sep) and os.path.isfile(full):
+                return send_file(full)
+            return jsonify({"error": "not found"}), 404
 
     # the terminal is served from a different origin (dev server / static host);
     # personal tool, so a permissive CORS policy is fine
@@ -111,6 +127,7 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json") -> Flask:
 app = create_app(
     db_path=os.environ.get("LEDGER_DB", "bets.db"),
     feed_path=os.environ.get("FEED_PATH", "feed.json"),
+    static_dir=os.environ.get("STATIC_DIR", ""),
 )
 
 

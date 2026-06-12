@@ -47,10 +47,19 @@
   `xis.json` still wins; matching is by player id with order-insensitive name
   fallback. The HTML-scraper seam remains for sites with team news.
 
+- **Deployment** — `datalayer/jobs.py` (env-configured scheduled feed builder +
+  auto-settle with atomic feed writes and budget-safe defaults), Flask serves
+  the built terminal from `STATIC_DIR` (one origin, one container), multi-stage
+  Dockerfile (node build -> python image), compose runs api + feedjob on a
+  shared `ledger` volume (bets.db, feed.json, API cache) with keys from
+  `../.env`. Every piece verified natively (gunicorn + jobs cycle + static
+  serving); the compose file itself hasn't been executed — no Docker on the
+  dev machine. Postgres deferred until multi-instance is real.
+
 ## Next (in priority order)
 
-1. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
-   move to Postgres if running multi-instance.
+1. **Backtesting harness** (promoted from backlog) — historical odds to validate
+   edge before betting live.
 
 ## Backlog / ideas
 

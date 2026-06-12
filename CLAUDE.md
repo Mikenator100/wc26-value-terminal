@@ -52,12 +52,18 @@ python -m datalayer.build --key "$API_FOOTBALL_KEY" --league 1 --season 2026 --m
 #   --lineups-json xis.json supplies manual XIs that win over the inference)
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups --out feed.json
 
-# run the API (persistent ledger + feed + auto-settle)
+# run the API (persistent ledger + feed + auto-settle); set STATIC_DIR to the
+# built frontend (frontend/dist) to serve the terminal from the same origin
 gunicorn 'datalayer.service:app'            # :8000
 # or: python -m datalayer.service
 
-# everything together with persistence + scheduled feed + auto-settle
-API_FOOTBALL_KEY=... ODDS_API_KEY=... docker compose up --build
+# the scheduled loop: rebuild feed + auto-settle every FEED_INTERVAL seconds
+# (env-configured, budget-safe defaults — see datalayer/jobs.py; RUN_ONCE=1 for cron)
+python -m datalayer.jobs
+
+# everything together: terminal + API + scheduled feed job + persistent volume
+# (keys read from ../.env)
+docker compose up --build
 
 # tests (all pass, no network needed)
 for t in tests/*.py; do python "$t"; done

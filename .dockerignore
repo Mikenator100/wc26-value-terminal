@@ -1,0 +1,9 @@
+.git
+.env
+**/node_modules
+**/dist
+**/.venv
+**/.cache
+**/__pycache__
+**/*.db
+backend/feed.json
