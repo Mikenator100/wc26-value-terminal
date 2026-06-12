@@ -993,6 +993,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [playerBook, setPlayerBook] = useState({}); // "name|market" -> odds
   const [openPlayers, setOpenPlayers] = useState({}); // name -> expanded card
   const [openFams, setOpenFams] = useState({}); // "name|family" -> expanded
+  const [plrTeam, setPlrTeam] = useState("home"); // home | away | slip
   const players = useMemo(
     () =>
       base.players.map((p) => {
@@ -1480,6 +1481,21 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
 
             <div className="vt-plrcontrols">
               <div className="vt-lineuptoggle">
+                {[
+                  ["home", base.home],
+                  ["away", base.away],
+                  ...(players.some((p) => p.inXI && !p.team) ? [["slip", "From slip"]] : []),
+                ].map(([k, label]) => (
+                  <button
+                    key={k}
+                    className={`vt-lbtn ${plrTeam === k ? "on" : ""}`}
+                    onClick={() => setPlrTeam(k)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="vt-lineuptoggle">
                 {["predicted", "confirmed"].map((s) => (
                   <button
                     key={s}
@@ -1508,7 +1524,9 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
 
             <div className="vt-plrgrid">
               {players
-                .filter((p) => p.inXI)
+                .filter((p) => p.inXI && (plrTeam === "slip"
+                  ? !p.team
+                  : p.team === (plrTeam === "home" ? base.home : base.away)))
                 .map((p) => {
                   const open = !!openPlayers[p.name];
                   return (
@@ -1520,7 +1538,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                       <div style={{ textAlign: "left" }}>
                         <div className="vt-plrname">{p.name}</div>
                         <div className="vt-plrmeta">
-                          {p.team} · {Math.round(p.startProb * 100)}% to start
+                          {p.team || "side unknown · from slip"} · {Math.round(p.startProb * 100)}% to start
                         </div>
                       </div>
                       <div className="vt-plrtags">

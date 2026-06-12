@@ -194,11 +194,11 @@ def merge_structured_into_feed(feed: list[dict], book: dict) -> dict:
         for nk, prices in book["players"].items():
             if nk in used_keys:
                 continue
-            # the slip doesn't say which side a player is on; with full squads
-            # this only catches players missing from the API rosters entirely
+            # the slip doesn't say which side a player is on, so placeholders
+            # carry team "" — the terminal shows them under their own tab
             display = prices.get("_name") or nk.title()
             match.setdefault("players", []).append({
-                "name": display, "team": match["home"],
+                "name": display, "team": "",
                 "clubRole": "CM", "countryRole": "CM", "predictedPos": "CM",
                 "confirmedPos": "CM", "startProb": 0.4, "confirmedIn": False,
                 "club": {k: None for k in ("shots", "sot", "goals", "assists", "cards",

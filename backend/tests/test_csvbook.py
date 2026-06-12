@@ -80,6 +80,7 @@ def test_merge():
         assert m["players"][1]["bookOdds"]["Shots 1+"] == 2.5  # typo matched
         ghost = next(p for p in m["players"] if p.get("csvOnly"))
         assert ghost["name"] == "Mystery Man" and ghost["bookOdds"]["Shots 1+"] == 3.0
+        assert ghost["team"] == ""  # side unknown -> the terminal's slip tab
         assert "_name" not in ghost["bookOdds"]
         print(f"merge ok ({st})")
     finally:

@@ -54,7 +54,11 @@ python -m datalayer.build --key "$API_FOOTBALL_KEY" --league 1 --season 2026 --m
 #   ladder-style player props (csvprops.py) or the full structured one-match
 #   export (csvbook.py: every player + match markets like alternative totals,
 #   3-way corners, ranges, combos -> player bookOdds + match bookPrices;
-#   slip players missing from the API roster get placeholder profiles)
+#   slip players missing from the API roster get placeholder profiles under
+#   the terminal's "From slip" tab). Per-match workflow: overwrite
+#   backend/props/bet365_structured_markets.csv with the new match's export
+#   and push — once its match leaves the feed the file goes stale and is
+#   ignored automatically (no cleanup needed beyond replacing it).
 python -m datalayer.build --key "$API_FOOTBALL_KEY" --odds-key "$THE_ODDS_API_KEY" --auto-lineups \
   --squad-limit 26 --props-csv props/bet365_structured_markets.csv --out feed.json
 
