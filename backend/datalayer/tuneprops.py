@@ -28,9 +28,45 @@ def _family(label: str) -> str:
     return "Other"
 
 
+def _team_scales(match: dict, country_weight: float) -> dict:
+    """Mirror of the terminal's team-mass normalisation: per-team scale
+    factors so the squad shares the match's goal/shot budget."""
+    sums: dict[str, dict[str, float]] = {}
+    for p in match.get("players", []):
+        team = p.get("team")
+        if not team:
+            continue
+        is_home = team == match.get("home")
+        exp = player_expectations(
+            p, p.get("predictedPos", "CM"), p.get("startProb", 0.7),
+            team_xg=match["xgHome"] if is_home else match["xgAway"],
+            opp_xg=match["xgAway"] if is_home else match["xgHome"],
+            country_weight=country_weight,
+        )
+        t = sums.setdefault(team, {"goals": 0, "assists": 0, "shots": 0, "sot": 0})
+        for k in t:
+            t[k] += exp.get(k, 0)
+
+    out: dict[str, dict[str, float]] = {}
+    clamp = lambda x: max(0.25, min(1.5, x))
+    for team, t in sums.items():
+        is_home = team == match.get("home")
+        xg = match["xgHome"] if is_home else match["xgAway"]
+        rates = (match.get("teamRates") or {}).get("home" if is_home else "away")
+        a_f = max(0.6, min(1.7, xg / 1.35))
+        out[team] = {
+            "goals": clamp(xg / t["goals"]) if t["goals"] else 1.0,
+            "assists": clamp(0.8 * xg / t["assists"]) if t["assists"] else 1.0,
+            "shots": clamp(rates["shots"] * a_f / t["shots"]) if rates and t["shots"] else 1.0,
+            "sot": clamp(rates["sot"] * a_f / t["sot"]) if rates and t["sot"] else 1.0,
+        }
+    return out
+
+
 def report(feed: list[dict], margin: float = 1.06, country_weight: float = 0.6) -> dict:
     rows = defaultdict(list)
     for match in feed:
+        scales = _team_scales(match, country_weight)
         for p in match.get("players", []):
             book = p.get("bookOdds")
             if not book:
@@ -42,6 +78,7 @@ def report(feed: list[dict], margin: float = 1.06, country_weight: float = 0.6) 
                 opp_xg=match["xgAway"] if is_home else match["xgHome"],
                 set_pieces={"pen": p.get("pen"), "fk": p.get("fk")},
                 country_weight=country_weight,
+                team_scales=scales.get(p.get("team")),
             )
             fair = player_markets(exp)
             for label, price in book.items():

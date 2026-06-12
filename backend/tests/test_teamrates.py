@@ -37,9 +37,10 @@ def test_team_rates():
         stats_payload(6, corners=4, cards=3, shots=11, sot=4, offsides=1, fouls=14, red=1),
     ]
     r = team_rates(6, payloads)
-    # 2 measured games shrink toward the priors with 4 pseudo-games:
-    # corners (10+4*5)/6 = 5.0 (measured == prior), shots (26+4*12.5)/6 = 12.67
-    assert r["corners"] == 5.0 and r["cards"] == 2.0
+    # 2 measured games shrink toward the priors with 4 pseudo-games
+    # (cards use 8 — friendlies under-card vs competitive matches):
+    # corners (10+4*5)/6 = 5.0, cards (4+8*2.4)/10 = 2.32
+    assert r["corners"] == 5.0 and abs(r["cards"] - 2.32) < 0.01
     assert abs(r["shots"] - 12.67) < 0.01 and abs(r["sot"] - 4.6) < 0.01
     assert abs(r["offsides"] - 1.83) < 0.01 and abs(r["fouls"] - 12.33) < 0.01
     assert r["_games"] == 2

@@ -14,8 +14,10 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-# default dispersion (r) by metric — smaller = fatter tail (team-level counts)
-DISP = {"corners": 10, "cards": 5, "shots": 15, "sot": 8, "offsides": 4,
+# default dispersion (r) by metric — smaller = fatter tail (team-level counts).
+# cards r=8: overdispersion adds mass at ZERO cards, and the book's both-teams-
+# carded prices imply P(team blanks) ~9%, which a fatter tail badly overstates.
+DISP = {"corners": 10, "cards": 8, "shots": 15, "sot": 8, "offsides": 4,
         "tackles": 20, "fouls": 25, "passes": 25, "saves": 6,
         "throwins": 18, "freekicks": 14, "goalkicks": 8}
 
@@ -212,7 +214,8 @@ def effective_country_weight(profile: dict, country_weight: float) -> float:
 
 def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: float,
                         opp_xg: float, set_pieces: Optional[dict] = None,
-                        country_weight: float = 0.6) -> dict:
+                        country_weight: float = 0.6,
+                        team_scales: Optional[dict] = None) -> dict:
     """Expected per-match counts with opponent-strength and set-piece adjustments.
 
     Attacking output scales with the team's xG (opponent defence is baked into
@@ -249,20 +252,26 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         return country_weight * n + (1 - country_weight) * c
 
     # thin per-90 samples shrink toward the role baseline (270 min ≈ three
-    # matches earns half-trust); profiles without minutes info (sample data)
-    # keep their stated rates untouched
+    # matches earns half-trust; assists are the noisiest rate and need ~9
+    # matches). Profiles without minutes info (sample data) stay untouched.
     mins = profile.get("_minutes") or {}
     total_mins = (mins.get("club") or 0) + (mins.get("country") or 0)
-    w_data = total_mins / (total_mins + 270.0) if total_mins else 1.0
+    _K = {"assists": 810.0}
 
     def grounded(metric, value):
-        return w_data * value + (1 - w_data) * rc.get(metric, value)
+        if not total_mins:
+            return value
+        w = total_mins / (total_mins + _K.get(metric, 270.0))
+        return w * value + (1 - w) * rc.get(metric, value)
 
+    # team-mass normalisation (mirrors the JSX second pass): callers that see
+    # the whole squad pass scales so players share the team's goal/shot budget
+    sc = team_scales or {}
     exp = {
-        "goals": grounded("goals", blend("goals")) * start_prob * attack,
-        "sot": grounded("sot", blend("sot")) * start_prob * attack,
-        "shots": grounded("shots", blend("shots")) * start_prob * attack,
-        "assists": grounded("assists", blend("assists")) * start_prob * attack,
+        "goals": grounded("goals", blend("goals")) * start_prob * attack * sc.get("goals", 1.0),
+        "sot": grounded("sot", blend("sot")) * start_prob * attack * sc.get("sot", 1.0),
+        "shots": grounded("shots", blend("shots")) * start_prob * attack * sc.get("shots", 1.0),
+        "assists": grounded("assists", blend("assists")) * start_prob * attack * sc.get("assists", 1.0),
         "passes": grounded("passes", measured("passes")) * start_prob * math.sqrt(attack),
         "tackles": grounded("tackles", measured("tackles")) * start_prob * defend,
         "fouls": grounded("fouls", measured("fouls")) * start_prob * defend,

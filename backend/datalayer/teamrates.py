@@ -37,9 +37,13 @@ RED_PROB_RANGE = (0.02, 0.30)
 # tournament-typical per-team-per-game priors. Small form windows produce wild
 # averages (one ill-tempered friendly reads as a 20-foul team); measured rates
 # shrink toward these with PRIOR_GAMES of pseudo-sample.
-PRIORS = {"corners": 5.0, "cards": 2.0, "shots": 12.5, "sot": 4.4,
+PRIORS = {"corners": 5.0, "cards": 2.4, "shots": 12.5, "sot": 4.4,
           "offsides": 2.0, "fouls": 12.5, "red": 0.05}
 PRIOR_GAMES = 4.0
+# cards have a regime problem on top of the small sample: the form window is
+# friendlies, which draw far fewer bookings than competitive WC matches — so
+# the competitive prior gets extra weight
+PRIOR_GAMES_BY = {"cards": 8.0}
 
 FINISHED = {"FT", "AET", "PEN"}
 
@@ -114,7 +118,8 @@ def team_rates(team_id: int, stats_payloads: list[list[dict]]) -> Optional[dict]
     # pseudo-sample, so a 1-2 game window can't set extreme rates outright
     def shrunk(k):
         measured = sums.get(k, PRIORS[k] * games)
-        return round((measured + PRIORS[k] * PRIOR_GAMES) / (games + PRIOR_GAMES), 2)
+        pg = PRIOR_GAMES_BY.get(k, PRIOR_GAMES)
+        return round((measured + PRIORS[k] * pg) / (games + pg), 2)
 
     fouls = shrunk("fouls")
     tackles = round(min(TACKLES_RANGE[1], max(TACKLES_RANGE[0], fouls * TACKLES_PER_FOUL)), 2)

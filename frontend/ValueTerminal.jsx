@@ -195,8 +195,12 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   const posChanged =
     confirmed && p.confirmedPos && p.confirmedPos !== p.predictedPos;
 
-  // rescale each source rate from its measured role to the match role
-  const f = (metric, fromRole) => ROLE[pos][metric] / ROLE[fromRole][metric];
+  // rescale each source rate from its measured role to the match role.
+  // BOUNDED: the raw ratio explodes when the source role's baseline is tiny
+  // (CB->FB assists is 0.20/0.05 = 4x, which priced a fullback to assist at
+  // 56%); a position change can plausibly move output ~±60%, no more
+  const f = (metric, fromRole) =>
+    clamp(ROLE[pos][metric] / (ROLE[fromRole][metric] || 1), 0.6, 1.6);
   const blend = (metric) =>
     countryWeight * (p.country[metric] * f(metric, p.countryRole)) +
     (1 - countryWeight) * (p.club[metric] * f(metric, p.clubRole));
@@ -224,15 +228,24 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   const expo = startProb <= 0 ? 0 : startProb + (1 - startProb) * 0.35;
 
   // thin per-90 samples shrink toward the role baseline (270 min ≈ three
-  // matches earns half-trust); sample data without minutes stays untouched
+  // matches earns half-trust; assists are the noisiest rate and need ~9
+  // matches). Sample data without minutes stays untouched.
   const totalMins = (p._minutes?.club || 0) + (p._minutes?.country || 0);
-  const wData = totalMins ? totalMins / (totalMins + 270) : 1;
-  const grounded = (metric, v) => wData * v + (1 - wData) * ROLE[pos][metric];
+  const grounded = (metric, v) => {
+    if (!totalMins) return v;
+    const w = totalMins / (totalMins + (metric === "assists" ? 810 : 270));
+    return w * v + (1 - w) * ROLE[pos][metric];
+  };
 
-  let expGoals = grounded("goals", blend("goals")) * expo * attackF;
-  let expSot = grounded("sot", blend("sot")) * expo * attackF;
-  let expShots = grounded("shots", blend("shots")) * expo * attackF;
-  let expAssists = grounded("assists", blend("assists")) * expo * attackF;
+  // team-mass normalisation (second pricing pass): individually-estimated
+  // attacking rates don't sum to the team's goal/shot budget — a squad can
+  // easily "expect" 4 goals against a 1.7 xG — so MarketsView computes per-
+  // team scales (teamXg / sum of expGoals, etc.) and re-prices with them
+  const sc = ctx.scales || {};
+  let expGoals = grounded("goals", blend("goals")) * expo * attackF * (sc.goals ?? 1);
+  let expSot = grounded("sot", blend("sot")) * expo * attackF * (sc.sot ?? 1);
+  let expShots = grounded("shots", blend("shots")) * expo * attackF * (sc.shots ?? 1);
+  let expAssists = grounded("assists", blend("assists")) * expo * attackF * (sc.assists ?? 1);
   const expPasses = grounded("passes", measured("passes")) * expo * Math.sqrt(attackF);
   const expTackles = grounded("tackles", measured("tackles")) * expo * defenceF;
   const expFouls = grounded("fouls", measured("fouls")) * expo * defenceF;
@@ -299,8 +312,8 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   }
   return {
     startProb, pos, posChanged, inXI: startProb > 0, pen: !!p.pen, fk: !!p.fk, props,
-    // expected counts, exposed for the SGM builder's conditional repricing
-    exp: { goals: expGoals, sot: expSot, shots: expShots },
+    // expected counts, exposed for the SGM builder and the normalisation pass
+    exp: { goals: expGoals, sot: expSot, shots: expShots, assists: expAssists },
   };
 }
 
@@ -899,7 +912,7 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
 
   // ---- team count markets (corners, cards, shots, SOT, offsides, tackles, fouls) ----
   if (teamRates) {
-    const R = teamRates, disp = { corners: 10, cards: 5, shots: 15, sot: 8, offsides: 4, tackles: 20, fouls: 25, throwins: 18, freekicks: 14, goalkicks: 8 };
+    const R = teamRates, disp = { corners: 10, cards: 8, shots: 15, sot: 8, offsides: 4, tackles: 20, fouls: 25, throwins: 18, freekicks: 14, goalkicks: 8 };
     // opponent strength via xG: attacking volume scales with own attack, while
     // discipline/defensive counts scale with how much the team must defend
     const BASE_G = 1.35;
@@ -994,15 +1007,39 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [openPlayers, setOpenPlayers] = useState({}); // name -> expanded card
   const [openFams, setOpenFams] = useState({}); // "name|family" -> expanded
   const [plrTeam, setPlrTeam] = useState("home"); // home | away | slip
-  const players = useMemo(
-    () =>
-      base.players.map((p) => {
-        const isHome = p.team === base.home;
-        const ctx = { teamXg: isHome ? xgHome : xgAway, oppXg: isHome ? xgAway : xgHome };
-        return { ...p, ...priceProps(p, playerCW, lineupStatus, ctx) };
-      }),
-    [base, playerCW, lineupStatus, xgHome, xgAway]
-  );
+  const players = useMemo(() => {
+    const ctxFor = (p) => {
+      const isHome = p.team === base.home;
+      return { teamXg: isHome ? xgHome : xgAway, oppXg: isHome ? xgAway : xgHome };
+    };
+    // pass 1: independent estimates
+    const raw = base.players.map((p) => ({ ...p, ...priceProps(p, playerCW, lineupStatus, ctxFor(p)) }));
+    // pass 2: team-mass normalisation — the squad shares the match's goal and
+    // shot budget instead of each player being priced as if alone
+    const scaleFor = (teamName, isHome) => {
+      const members = raw.filter((r) => r.team === teamName && r.inXI);
+      const sum = (k) => members.reduce((a, r) => a + (r.exp?.[k] || 0), 0);
+      const teamXg = isHome ? xgHome : xgAway;
+      const R = base.teamRates?.[isHome ? "home" : "away"];
+      const aF = clamp(teamXg / 1.35, 0.6, 1.7);
+      const s = (target, total) =>
+        total > 0 && target > 0 ? clamp(target / total, 0.25, 1.5) : 1;
+      return {
+        goals: s(teamXg, sum("goals")),
+        assists: s(0.8 * teamXg, sum("assists")), // ~80% of goals are assisted
+        shots: R ? s(R.shots * aF, sum("shots")) : 1,
+        sot: R ? s(R.sot * aF, sum("sot")) : 1,
+      };
+    };
+    const sHome = scaleFor(base.home, true);
+    const sAway = scaleFor(base.away, false);
+    return base.players.map((p) => {
+      const scales = p.team === base.home ? sHome : p.team === base.away ? sAway
+        : { goals: Math.min(sHome.goals, sAway.goals), assists: Math.min(sHome.assists, sAway.assists),
+            shots: Math.min(sHome.shots, sAway.shots), sot: Math.min(sHome.sot, sAway.sot) };
+      return { ...p, ...priceProps(p, playerCW, lineupStatus, { ...ctxFor(p), scales }) };
+    });
+  }, [base, playerCW, lineupStatus, xgHome, xgAway]);
 
   // player legs for the SGM builder: top attacking starters, repriced in the
   // goal environment of whatever matrix legs are picked (see analyseSGM)
