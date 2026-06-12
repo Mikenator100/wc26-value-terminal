@@ -176,6 +176,39 @@ const ROLE = {
 };
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
+/* ---------- bet grading ----------
+ * Edge alone misleads: +10% at odds 9 is a high-variance longshot on a
+ * model-uncertain tail, +10% at 2.3 on a market-anchored total is the best
+ * bet on the board. Score = risk-adjusted edge (Kelly fraction — edge per
+ * unit of variance, which demotes longshots naturally) + confidence in the
+ * probability (source tier, extra discount in deep tails) + hit-rate comfort
+ * (a banker is a good multi leg even with zero edge). */
+const SRC_CONF = { main: 1.0, goals: 0.9, team: 0.7, derived: 0.55, player: 0.65, ghost: 0.45 };
+
+function betScore(odds, hitRate, edge, conf) {
+  const kellyF = edge > 0 && odds > 1 ? edge / (odds - 1) : 0;
+  let c = conf;
+  if (hitRate < 0.12) c *= clamp(hitRate / 0.12, 0.4, 1); // deep-tail discount
+  const e = clamp(kellyF / 0.08, 0, 1); // 8%-of-bankroll Kelly = full marks
+  const h = clamp((hitRate - 0.2) / 0.55, 0, 1);
+  const s = 100 * (0.5 * e + 0.3 * c + 0.2 * h);
+  const grade =
+    s >= 88 ? "A+" : s >= 78 ? "A" : s >= 70 ? "A-" : s >= 62 ? "B+" :
+    s >= 54 ? "B" : s >= 46 ? "B-" : s >= 38 ? "C+" : s >= 30 ? "C" :
+    s >= 22 ? "D" : "F";
+  return { score: s, grade };
+}
+
+const gradeColor = (g) =>
+  g.startsWith("A") ? "var(--val)" : g.startsWith("B") ? "var(--amber)"
+  : g.startsWith("C") ? "var(--muted)" : "var(--neg)";
+
+// confidence tier for a catalog market by its group/name
+function catalogConf(group, marketName) {
+  if (group !== "Team markets") return SRC_CONF.goals;
+  return /Throw-ins|Free kicks|Goal kicks/.test(marketName) ? SRC_CONF.derived : SRC_CONF.team;
+}
+
 // price one player's props given country/club blend, lineup status, and match
 // context (opponent strength via team/opponent xG, plus set-piece duty)
 function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
@@ -1119,7 +1152,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   // best value across EVERYTHING priced: main markets, the catalog (CSV or
   // typed prices), and player props — one ranked board
   const valuePicks = useMemo(() => {
-    const picks = bestBets.map((o) => ({ ...o, src: "Main" }));
+    const picks = bestBets.map((o) => ({ ...o, src: "Main", conf: SRC_CONF.main }));
     catalog.forEach((g) =>
       g.markets.forEach((m) =>
         m.outcomes.forEach((o) => {
@@ -1129,7 +1162,8 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
           const e = price * o.prob - 1;
           if (e > 0.005)
             picks.push({ market: m.name, label: o.label, bet365: price, hitRate: o.prob,
-                         edge: e, kellyFull: kelly(price, o.prob), src: "Catalog" });
+                         edge: e, kellyFull: kelly(price, o.prob), src: "Catalog",
+                         conf: catalogConf(g.group, m.name) });
         })
       )
     );
@@ -1141,11 +1175,40 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
         const e = price * pr.hitRate - 1;
         if (e > 0.005)
           picks.push({ market: pl.name, label: pr.name, bet365: price, hitRate: pr.hitRate,
-                       edge: e, kellyFull: kelly(price, pr.hitRate), src: "Player" });
+                       edge: e, kellyFull: kelly(price, pr.hitRate), src: "Player",
+                       conf: pl.csvOnly ? SRC_CONF.ghost : SRC_CONF.player });
       })
     );
-    return picks.sort((a, b) => b.edge - a.edge).slice(0, 6);
+    // rank by GRADE, not raw edge: risk-adjusted, confidence-weighted
+    return picks
+      .map((o) => ({ ...o, ...betScore(o.bet365, o.hitRate, o.edge, o.conf) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
   }, [bestBets, catalog, catBook, base, players, playerBook]);
+
+  // safest legs: high-but-useful hit-rate anchors for multi building (60-88%
+  // — fair odds ~1.15-1.65, enough to actually move a multi's price). Graded
+  // on comfort + confidence, not edge (they rarely have any on their own).
+  const safeLegs = useMemo(() => {
+    const legs = [];
+    const add = (market, label, prob, book, conf) => {
+      if (prob < 0.6 || prob > 0.88) return;
+      legs.push({ market, label, hitRate: prob, fair: 1 / prob, book,
+                  ...betScore(book || 1 / prob, prob, book ? book * prob - 1 : 0, conf) });
+    };
+    markets.forEach((m) =>
+      m.outcomes.forEach((o) => add(m.name, o.label, o.hitRate, o.bet365, SRC_CONF.main)));
+    catalog.forEach((g) =>
+      g.markets.forEach((m) =>
+        m.outcomes.forEach((o) => {
+          const raw = catBook[`${g.group}|${m.name}|${o.label}`];
+          const price = Number(raw !== undefined ? raw : base.bookPrices?.[`${m.name}|${o.label}`]) || null;
+          add(m.name, o.label, o.prob, price, catalogConf(g.group, m.name));
+        })
+      )
+    );
+    return legs.sort((a, b) => b.score - a.score || b.hitRate - a.hitRate).slice(0, 5);
+  }, [markets, catalog, catBook, base]);
   const suggestions = useMemo(
     () => suggestSGMs(base, matrix, target),
     [base, matrix, target]
@@ -1273,9 +1336,9 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
           {/* best singles */}
           <section className="vt-best">
             <div className="vt-besthead">
-              <span>Best value singles</span>
+              <span>Best bets — graded</span>
               <span className="vt-bestnote">
-                ranked by edge · stake = {Math.round(kellyFrac * 100)}% Kelly
+                ranked by grade: risk-adjusted edge + confidence + hit comfort · stake = {Math.round(kellyFrac * 100)}% Kelly
               </span>
             </div>
             {valuePicks.length === 0 ? (
@@ -1287,7 +1350,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               <div className="vt-bestrow">
                 {valuePicks.map((o, i) => (
                   <div className="vt-card" key={i}>
-                    <div className="vt-cardmkt">{o.src === "Player" ? "Player prop" : o.market}{o.src === "Player" ? ` · ${o.market}` : ""}</div>
+                    <div className="vt-cardmkt" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>{o.src === "Player" ? "Player prop" : o.market}{o.src === "Player" ? ` · ${o.market}` : ""}</span>
+                      <b className="vt-gradechip" style={{ color: gradeColor(o.grade) }}>{o.grade}</b>
+                    </div>
                     <div className="vt-cardlabel">{o.label}</div>
                     <div className="vt-cardodds">{od(o.bet365)}</div>
                     <div className="vt-cardrow">
@@ -1325,6 +1391,35 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
           </section>
 
           {/* market tables */}
+          {safeLegs.length > 0 && (
+            <section className="vt-sgm">
+              <div className="vt-mkthead">
+                <span>Safest legs</span>
+                <span className="vt-juice">highest hit rates · multi anchors, not value on their own</span>
+              </div>
+              <div className="cat-table">
+                <div className="cat-row cat-row--head">
+                  <span>Outcome</span>
+                  <span className="vt-num">Hit</span>
+                  <span className="vt-num">Fair</span>
+                  <span className="vt-num">Bet365</span>
+                  <span className="vt-num">Grade</span>
+                  <span />
+                </div>
+                {safeLegs.map((l, i) => (
+                  <div className="cat-row" key={i}>
+                    <span className="cat-olabel">{l.market} — {l.label}</span>
+                    <span className="vt-num vt-hit">{pct(l.hitRate)}</span>
+                    <span className="vt-num vt-fair">{od(l.fair)}</span>
+                    <span className="vt-num">{l.book ? od(l.book) : "—"}</span>
+                    <span className="vt-num vt-gradechip" style={{ color: gradeColor(l.grade) }}>{l.grade}</span>
+                    <span />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {markets.map((m) => (
             <section className="vt-mkt" key={m.key}>
               <div className="vt-mkthead">
@@ -1685,6 +1780,9 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                   const shown = raw !== undefined ? raw : fromFeed ?? "";
                                   const bookOdds = shown && Number(shown) > 1 ? Number(shown) : null;
                                   const e = bookOdds ? bookOdds * pr.hitRate - 1 : null;
+                                  const gr = bookOdds
+                                    ? betScore(bookOdds, pr.hitRate, e, p.csvOnly ? SRC_CONF.ghost : SRC_CONF.player)
+                                    : null;
                                   return (
                                     <div className="vt-prow" key={pr.name}>
                                       <span className="vt-pmkt">{pr.name}</span>
@@ -1710,6 +1808,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                         style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}
                                       >
                                         {e == null ? "—" : signedPct(e)}
+                                        {gr && <i className="vt-rowgrade" style={{ color: gradeColor(gr.grade) }}>{gr.grade}</i>}
                                       </span>
                                       <span className="vt-num vt-stake">
                                         {bookOdds && e > 0
@@ -1783,6 +1882,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                 const shown = raw !== undefined ? raw : fromFeed ?? "";
                                 const book = shown && Number(shown) > 1 ? Number(shown) : null;
                                 const e = book ? book * o.prob - 1 : null;
+                                const gr = book ? betScore(book, o.prob, e, catalogConf(g.group, m.name)) : null;
                                 return (
                                   <div className="cat-row" key={o.label}>
                                     <span className="cat-olabel">{o.label}</span>
@@ -1798,6 +1898,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                     />
                                     <span className="vt-num" style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}>
                                       {e == null ? "—" : signedPct(e)}
+                                      {gr && <i className="vt-rowgrade" style={{ color: gradeColor(gr.grade) }}>{gr.grade}</i>}
                                     </span>
                                     <span className="vt-num vt-stake">
                                       {book && e > 0
@@ -2617,6 +2718,8 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-famhead:hover{color:var(--val);}
 .vt-famr{display:flex;align-items:center;gap:10px;}
 .vt-faml5{font-style:normal;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);font-weight:400;}
+.vt-gradechip{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;letter-spacing:.02em;}
+.vt-rowgrade{font-style:normal;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;margin-left:5px;}
 .vt-plrname{font-weight:600;font-size:15px;}
 .vt-plrmeta{color:var(--muted);font-size:11px;margin-top:2px;}
 .vt-poschip{background:var(--panelHi);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px;font-weight:600;font-family:'JetBrains Mono',monospace;}
