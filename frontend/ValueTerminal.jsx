@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 /* ================================================================== *
  *  WORLD CUP 2026 — VALUE TERMINAL  (v2: + Same Game Multis)
@@ -16,8 +16,8 @@ import { useState, useMemo } from "react";
  *    VALUE     – expected-value edge vs the bookmaker price
  *
  *  Single-market fair odds also blend in the sharp no-vig market line.
- *  Replace fetchMatchOdds() with a live aggregator feed (The Odds API
- *  / OddsPapi) to go live; the maths downstream is unchanged.
+ *  Live mode: App fetches the feed from datalayer.service (see API_BASE)
+ *  and falls back to SAMPLE_MATCHES; the maths downstream is unchanged.
  * ================================================================== */
 
 /* ---------- core maths ---------- */
@@ -402,10 +402,35 @@ const SAMPLE_MATCHES = [
   },
 ];
 
-async function fetchMatchOdds() {
-  // const r = await fetch(`https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds?...&bookmakers=bet365,pinnacle&apiKey=${KEY}`);
-  // return normalise(await r.json());
-  return SAMPLE_MATCHES;
+/* ---------- live data wiring ---------- */
+// Where datalayer.service runs (feed + persistent ledger). Empty string
+// expects a feed.json served next to the app instead. Either way the terminal
+// falls back to SAMPLE_MATCHES when nothing answers, so the preview always renders.
+const API_BASE = "http://localhost:8000";
+
+async function fetchFeed() {
+  const r = await fetch(API_BASE ? `${API_BASE}/api/feed` : "feed.json");
+  if (!r.ok) throw new Error(`feed ${r.status}`);
+  const feed = await r.json();
+  if (!Array.isArray(feed) || !feed.length) throw new Error("empty feed");
+  return feed;
+}
+
+// server ledger row -> the shape the Track-record views render
+function fromServerBet(b) {
+  return {
+    id: b.id, serverId: b.id, fixture: b.match_id, market: b.market,
+    selection: b.selection, modelProb: b.model_prob, price: b.price,
+    stake: b.stake, status: b.status, closing: b.closing_price, pnl: b.pnl,
+    ts: (b.ts || 0) * 1000,
+  };
+}
+
+// the live feed carries ISO kickoffs; sample data carries display strings
+function fmtKick(kickoff) {
+  const d = new Date(kickoff);
+  if (isNaN(d)) return kickoff;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /* ---------- analyse single markets ---------- */
@@ -742,14 +767,13 @@ function deriveCatalog(M, xgHome, xgAway, teamRates) {
   return groups;
 }
 
-function MarketsView({ onLog = () => {} }) {
-  const matches = SAMPLE_MATCHES;
+function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {} }) {
   const [activeId, setActiveId] = useState(matches[0].id);
   const [modelWeight, setModelWeight] = useState(0.3);
   const [stake, setStake] = useState(100);
   const [kellyFrac, setKellyFrac] = useState(0.25);
 
-  const base = matches.find((m) => m.id === activeId);
+  const base = matches.find((m) => m.id === activeId) || matches[0];
   // editable xG (keyed by match so switching keeps its own values)
   const [xg, setXg] = useState({});
   const xgHome = xg[activeId]?.h ?? base.xgHome;
@@ -826,7 +850,7 @@ function MarketsView({ onLog = () => {} }) {
           <span className="vt-mark">▚</span>
           <div>
             <div className="vt-title">VALUE TERMINAL</div>
-            <div className="vt-sub">FIFA World Cup 2026 · edge &amp; hit-rate</div>
+            <div className="vt-sub">FIFA World Cup 2026 · edge &amp; hit-rate{feedNote && ` · ${feedNote}`}</div>
           </div>
         </div>
         <div className="vt-controls">
@@ -872,7 +896,7 @@ function MarketsView({ onLog = () => {} }) {
                 {m.live && <span className="vt-live">LIVE</span>}
               </div>
               <div className="vt-matchmeta">
-                {m.group} · {m.kickoff}
+                {m.group} · {fmtKick(m.kickoff)}
               </div>
             </button>
           ))}
@@ -886,7 +910,7 @@ function MarketsView({ onLog = () => {} }) {
                 {base.home} <span className="vt-vs">vs</span> {base.away}
               </h2>
               <div className="vt-herometa">
-                {base.group} · {base.kickoff}
+                {base.group} · {fmtKick(base.kickoff)}
                 {base.live && <span className="vt-live sm">LIVE</span>}
               </div>
             </div>
@@ -1382,9 +1406,11 @@ function MarketsView({ onLog = () => {} }) {
 
           <footer className="vt-foot">
             <span>
-              Sample data shaped like an odds-aggregator feed. SGM hit rate is
-              the joint probability from the Poisson score matrix (correlation
-              exact). Replace fetchMatchOdds() with a live source.
+              {feedNote === "sample data"
+                ? "Sample data shaped like an odds-aggregator feed. "
+                : "Live feed from datalayer.service. "}
+              SGM hit rate is the joint probability from the Poisson score
+              matrix (correlation exact).
             </span>
             <span className="vt-disc">For analysis only · 18+ · gamble responsibly</span>
           </footer>
@@ -1548,8 +1574,8 @@ function segmentTrust(settled) {
   }).sort((a, b) => b.trust - a.trust);
 }
 
-const fmtPct = (x) => `${(x * 100).toFixed(1)}%`;
-const fmtSigned = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
+const fmtPct = (x) => (x == null || isNaN(x) ? "—" : `${(x * 100).toFixed(1)}%`);
+const fmtSigned = (x) => (x == null || isNaN(x) ? "—" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`);
 
 /* ---- charts (hand-drawn SVG, on-brand) ---- */
 function CalibrationChart({ points }) {
@@ -1595,8 +1621,10 @@ function PnlChart({ series }) {
   );
 }
 
-function PerformanceView({ ledger = [], onSettle = () => {} }) {
-  const sample = useMemo(() => generateLedger(), []);
+function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, live = false }) {
+  // live mode: only the real ledger counts; preview mode blends in the
+  // generated sample history so the dashboard renders with zero setup
+  const sample = useMemo(() => (live ? [] : generateLedger()), [live]);
   const liveSettled = ledger.filter((b) => b.status !== "open");
   const settled = useMemo(
     () => [...sample.filter((b) => b.status !== "open"), ...liveSettled],
@@ -1612,15 +1640,29 @@ function PerformanceView({ ledger = [], onSettle = () => {} }) {
   }, [settled]);
 
   const sampleOpen = sample.filter((b) => b.status === "open");
-  const recent = [...liveOpen, ...liveSettled, ...sampleOpen, ...settled.slice().reverse()].slice(0, 14);
-  const stats = [
-    { k: "Settled", v: String(m.n) },
-    { k: "Hit rate", v: fmtPct(m.hitRate) },
-    { k: "ROI / yield", v: fmtSigned(m.roi), c: m.roi >= 0 ? "var(--val)" : "var(--neg)" },
-    { k: "Avg CLV", v: fmtSigned(m.avgClv), c: m.avgClv >= 0 ? "var(--val)" : "var(--neg)" },
-    { k: "Positive CLV", v: fmtPct(m.posClv) },
-    { k: "Brier", v: m.brier.toFixed(3) },
-  ];
+  // open bets first, then every settled bet newest-first (settled already
+  // contains liveSettled — don't list them twice)
+  const recent = [...liveOpen, ...sampleOpen, ...settled.slice().reverse()].slice(0, 14);
+  // headline metrics from the service when it answered (the ledger's truth,
+  // including bets logged in earlier sessions); client-side maths otherwise
+  const P = remote?.profitability;
+  const stats = remote && remote.n
+    ? [
+        { k: "Settled", v: String(remote.n) },
+        { k: "Hit rate", v: fmtPct(remote.hit_rate) },
+        { k: "ROI / yield", v: fmtSigned(P?.roi), c: (P?.roi ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
+        { k: "Avg CLV", v: fmtSigned(P?.avg_clv), c: (P?.avg_clv ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
+        { k: "Positive CLV", v: fmtPct(P?.pct_positive_clv) },
+        { k: "Brier", v: remote.brier == null ? "—" : remote.brier.toFixed(3) },
+      ]
+    : [
+        { k: "Settled", v: String(m.n) },
+        { k: "Hit rate", v: fmtPct(m.hitRate) },
+        { k: "ROI / yield", v: fmtSigned(m.roi), c: (m.roi ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
+        { k: "Avg CLV", v: fmtSigned(m.avgClv), c: (m.avgClv ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
+        { k: "Positive CLV", v: fmtPct(m.posClv) },
+        { k: "Brier", v: m.brier == null ? "—" : m.brier.toFixed(3) },
+      ];
 
   return (
     <div className="vt-root">
@@ -1634,7 +1676,9 @@ function PerformanceView({ ledger = [], onSettle = () => {} }) {
           </div>
         </div>
         <div className="vt-sub" style={{ maxWidth: 260, textAlign: "right" }}>
-          Sample history · {settled.length} settled bets, generated in-memory
+          {live
+            ? `Live ledger · ${remote?.n ?? settled.length} settled, ${remote?.open ?? liveOpen.length} open`
+            : `Sample history · ${settled.length} settled bets, generated in-memory`}
         </div>
       </header>
 
@@ -1678,38 +1722,46 @@ function PerformanceView({ ledger = [], onSettle = () => {} }) {
               ))}
             </div>
             <p className="vt-sgmnote">
-              These are held in memory for this session only. Real persistence
-              across sessions uses the Python ledger + a server (the deployment
-              step). Settling a bet updates the metrics and calibration above.
+              {live
+                ? "Persisted to the datalayer.service ledger; auto-settlement and CLV capture run server-side as fixtures finish."
+                : "Held in memory for this session only — point API_BASE at a running datalayer.service to persist them."}
+              {" "}Settling a bet updates the metrics and calibration above.
             </p>
           </section>
         )}
 
-        <div className="perf-charts">
-          <div className="perf-chartcard">
-            <div className="perf-chead">
-              <span>Calibration</span>
-              <span className="vt-juice">curve below the line = overconfident</span>
+        {settled.length > 0 ? (
+          <div className="perf-charts">
+            <div className="perf-chartcard">
+              <div className="perf-chead">
+                <span>Calibration</span>
+                <span className="vt-juice">curve below the line = overconfident</span>
+              </div>
+              <CalibrationChart points={cal.points} />
+              <p className="perf-note">
+                Curve below the diagonal = the model claims more than it delivers.
+                The recommender replaces each raw probability with its calibrated
+                value before computing edge. {cal.active ? "Calibration active." : "Need 30+ bets."}
+              </p>
             </div>
-            <CalibrationChart points={cal.points} />
-            <p className="perf-note">
-              The model sits below the diagonal — it claims more than it delivers.
-              The recommender replaces each raw probability with its calibrated
-              value before computing edge. {cal.active ? "Calibration active." : "Need 30+ bets."}
-            </p>
-          </div>
-          <div className="perf-chartcard">
-            <div className="perf-chead">
-              <span>Cumulative P&amp;L</span>
-              <span className="vt-juice">units, settled order</span>
+            <div className="perf-chartcard">
+              <div className="perf-chead">
+                <span>Cumulative P&amp;L</span>
+                <span className="vt-juice">units, settled order</span>
+              </div>
+              <PnlChart series={pnlSeries} />
+              <p className="perf-note">
+                Expect noise: long drawdowns happen with genuine edge. CLV, not
+                this line, is the early read on whether the model beats the market.
+              </p>
             </div>
-            <PnlChart series={pnlSeries} />
-            <p className="perf-note">
-              Noisy and slightly negative overall — honest for an uncalibrated
-              model. CLV, not this line, is the early read on edge.
-            </p>
           </div>
-        </div>
+        ) : (
+          <p className="perf-note">
+            No settled bets yet. Log bets from the Markets tab; once fixtures
+            finish, auto-settlement fills this dashboard from the real ledger.
+          </p>
+        )}
 
         <section className="vt-sgm">
           <div className="vt-mkthead">
@@ -1782,9 +1834,9 @@ function PerformanceView({ ledger = [], onSettle = () => {} }) {
 
         <footer className="vt-foot">
           <span>
-            History generated in-memory to preview the betlog loop. In production
-            this reads your settled ledger; calibration and segment trust update
-            as bets resolve.
+            {live
+              ? "Reading the persistent ledger via /api/performance; calibration and segment trust update as bets resolve."
+              : "History generated in-memory to preview the betlog loop. In production this reads your settled ledger."}
           </span>
           <span className="vt-disc">For analysis only · 18+ · gamble responsibly</span>
         </footer>
@@ -1796,13 +1848,33 @@ function PerformanceView({ ledger = [], onSettle = () => {} }) {
 export default function App() {
   const [tab, setTab] = useState("markets");
   const [ledger, setLedger] = useState([]);
-  // set API_BASE to your deployed datalayer.service to persist bets across
-  // sessions (e.g. "https://your-host"); empty keeps them in-memory for preview.
-  const API_BASE = "";
+  const [matches, setMatches] = useState(SAMPLE_MATCHES);
+  const [liveFeed, setLiveFeed] = useState(false);
+  const [perf, setPerf] = useState(null); // /api/performance payload when live
+
+  useEffect(() => {
+    let dead = false;
+    fetchFeed()
+      .then((feed) => { if (!dead) { setMatches(feed); setLiveFeed(true); } })
+      .catch(() => {}); // keep the sample preview
+    if (API_BASE) {
+      fetch(`${API_BASE}/api/bets`)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((bets) => { if (!dead) setLedger(bets.map(fromServerBet)); })
+        .catch(() => {});
+      fetch(`${API_BASE}/api/performance`)
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((p) => { if (!dead) setPerf(p); })
+        .catch(() => {});
+    }
+    return () => { dead = true; };
+  }, []);
+
   const logBet = (b) => {
+    const localId = Math.random().toString(36).slice(2, 8);
     setLedger((l) => [
       ...l,
-      { ...b, id: Math.random().toString(36).slice(2, 8), ts: Date.now(), status: "open", closing: null, pnl: null },
+      { ...b, id: localId, ts: Date.now(), status: "open", closing: null, pnl: null },
     ]);
     if (API_BASE) {
       fetch(`${API_BASE}/api/bets`, {
@@ -1812,22 +1884,36 @@ export default function App() {
           match_id: b.fixture, market: b.market, selection: b.selection,
           model_prob: b.modelProb, price: b.price, stake: b.stake,
         }),
-      }).catch(() => {});
+      })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then(({ id }) =>
+          setLedger((l) => l.map((x) => (x.id === localId ? { ...x, serverId: id } : x)))
+        )
+        .catch(() => {});
     }
   };
-  const settleBet = (id, result) =>
+  const settleBet = (id, result) => {
+    const bet = ledger.find((b) => b.id === id);
     setLedger((l) =>
       l.map((b) =>
         b.id === id
           ? {
               ...b,
               status: result,
-              closing: b.price,
+              closing: b.closing ?? b.price,
               pnl: result === "won" ? +(b.stake * (b.price - 1)).toFixed(2) : -b.stake,
             }
           : b
       )
     );
+    if (API_BASE && bet?.serverId) {
+      fetch(`${API_BASE}/api/bets/${bet.serverId}/settle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ result }),
+      }).catch(() => {});
+    }
+  };
   const openCount = ledger.filter((b) => b.status === "open").length;
 
   return (
@@ -1841,7 +1927,16 @@ export default function App() {
           {openCount > 0 && <span className="app-dot" title={`${openCount} open`} />}
         </button>
       </div>
-      {tab === "markets" ? <MarketsView onLog={logBet} /> : <PerformanceView ledger={ledger} onSettle={settleBet} />}
+      {tab === "markets" ? (
+        <MarketsView
+          key={liveFeed ? "live" : "sample"} // remount so the fixture rail resets on go-live
+          matches={matches}
+          feedNote={liveFeed ? `live feed · ${matches.length} matches` : "sample data"}
+          onLog={logBet}
+        />
+      ) : (
+        <PerformanceView ledger={ledger} onSettle={settleBet} remote={perf} live={liveFeed} />
+      )}
     </div>
   );
 }

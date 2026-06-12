@@ -25,6 +25,15 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json") -> Flask:
     app = Flask(__name__)
     ledger = Ledger(db_path)
 
+    # the terminal is served from a different origin (dev server / static host);
+    # personal tool, so a permissive CORS policy is fine
+    @app.after_request
+    def cors(resp):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        return resp
+
     @app.get("/api/health")
     def health():
         return jsonify({"ok": True})

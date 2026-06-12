@@ -62,10 +62,19 @@ API_FOOTBALL_KEY=... ODDS_API_KEY=... docker compose up --build
 for t in tests/*.py; do python "$t"; done
 ```
 
-Frontend: `ValueTerminal.jsx` is a self-contained React component (default export
-`App`). It runs on baked-in `SAMPLE_MATCHES` out of the box. To go live, replace
-the sample data with a fetch of `feed.json`, and set `API_BASE` (top of `App`) to
-the deployed service URL so "Log bet" persists to the backend.
+Frontend: `ValueTerminal.jsx` (default export `App`) plus a minimal Vite harness
+(`frontend/package.json`, `index.html`, `main.jsx`):
+
+```bash
+cd frontend && npm install && npm run dev    # http://localhost:5173
+```
+
+On mount it fetches the feed, ledger, and performance from `API_BASE`
+(module-level const, default `http://localhost:8000` = the local
+datalayer.service) and falls back to baked-in `SAMPLE_MATCHES` when nothing
+answers, so the preview always renders. When live: "Log bet" POSTs to the
+persistent ledger, settles POST back, and Track record reads
+`/api/performance` instead of the in-memory sample history.
 
 ## Architecture in one paragraph
 

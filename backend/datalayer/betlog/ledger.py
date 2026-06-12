@@ -8,6 +8,7 @@ closing line value (CLV) — the fastest honest signal of real edge.
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -57,10 +58,14 @@ CREATE TABLE IF NOT EXISTS bets (
 
 class Ledger:
     def __init__(self, path: str = "bets.db"):
-        self.conn = sqlite3.connect(path)
+        # the Flask service hits this from request worker threads; one shared
+        # connection guarded by a lock keeps sqlite3 happy at this scale
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute(SCHEMA)
-        self.conn.commit()
+        self._lock = threading.Lock()
+        with self._lock:
+            self.conn.execute(SCHEMA)
+            self.conn.commit()
 
     # -- write ----------------------------------------------------------- #
     def record(
@@ -87,41 +92,48 @@ class Ledger:
             stake=stake,
             bankroll=bankroll,
         )
-        self.conn.execute(
-            "INSERT INTO bets VALUES (:id,:ts,:match_id,:market,:selection,:model_prob,"
-            ":price,:fair_odds,:edge,:stake,:bankroll,:status,:closing_price,:pnl,:settled_ts)",
-            bet.__dict__,
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO bets VALUES (:id,:ts,:match_id,:market,:selection,:model_prob,"
+                ":price,:fair_odds,:edge,:stake,:bankroll,:status,:closing_price,:pnl,:settled_ts)",
+                bet.__dict__,
+            )
+            self.conn.commit()
         return bet.id
 
     def settle(self, bet_id: str, result: str, closing_price: Optional[float] = None) -> None:
         """result: 'won' | 'lost' | 'void'."""
-        row = self.conn.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-        if row is None:
-            raise KeyError(bet_id)
-        stake, price = row["stake"], row["price"]
-        if result == "won":
-            pnl = stake * (price - 1)
-        elif result == "lost":
-            pnl = -stake
-        else:  # void / push
-            pnl = 0.0
-        self.conn.execute(
-            "UPDATE bets SET status=?, pnl=?, closing_price=?, settled_ts=? WHERE id=?",
-            (result, pnl, closing_price, time.time(), bet_id),
-        )
-        self.conn.commit()
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+            if row is None:
+                raise KeyError(bet_id)
+            stake, price = row["stake"], row["price"]
+            if result == "won":
+                pnl = stake * (price - 1)
+            elif result == "lost":
+                pnl = -stake
+            else:  # void / push
+                pnl = 0.0
+            self.conn.execute(
+                "UPDATE bets SET status=?, pnl=?, closing_price=?, settled_ts=? WHERE id=?",
+                (result, pnl, closing_price, time.time(), bet_id),
+            )
+            self.conn.commit()
 
     # -- read ------------------------------------------------------------ #
     def settled(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM bets WHERE status IN ('won','lost')"
-        ).fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM bets WHERE status IN ('won','lost')"
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def open_bets(self) -> list[dict]:
-        return [dict(r) for r in self.conn.execute("SELECT * FROM bets WHERE status='open'").fetchall()]
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM bets WHERE status='open'").fetchall()
+        return [dict(r) for r in rows]
 
     def all(self) -> list[dict]:
-        return [dict(r) for r in self.conn.execute("SELECT * FROM bets").fetchall()]
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM bets").fetchall()
+        return [dict(r) for r in rows]

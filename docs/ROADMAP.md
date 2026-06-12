@@ -22,6 +22,11 @@
   capture, profitability reporting; Dockerfile + compose.
 - **Frontend** — two-tab terminal previewing everything on sample data; in-app
   log -> settle -> recalibrate.
+- **Frontend ↔ backend wiring** — `App` fetches `/api/feed`, `/api/bets`, and
+  `/api/performance` from `API_BASE` (falls back to sample data when nothing
+  answers); bets and settles persist to the SQLite ledger; Track record shows
+  the real performance payload in live mode. Vite dev harness in `frontend/`;
+  CORS on the service; the ledger is thread-safe under Flask workers now.
 - **Real rate data** — `teamRates` (corners/cards/shots/SOT/offsides/fouls + a
   bounded tackles estimate) averaged from each team's recent finished fixtures
   via `fixtures/statistics` (`datalayer/teamrates.py`); player per-90
@@ -37,10 +42,7 @@
    just need the per-game rates.
 2. **Predicted-lineup source** — point `HtmlPredictedLineups` at a real predicted-XI
    site (adapt selectors) or keep the manual `xis.json` path.
-3. **Frontend ↔ backend wiring** — externalise `SAMPLE_MATCHES` to a `feed.json`
-   fetch; set `API_BASE` so logging persists; show real `/api/performance` in Track
-   record instead of the in-memory mock.
-4. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
+3. **Deployment** — host the service + scheduled feed job; mount the ledger volume;
    move to Postgres if running multi-instance.
 
 ## Backlog / ideas
