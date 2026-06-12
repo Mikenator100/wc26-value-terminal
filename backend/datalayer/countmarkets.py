@@ -251,18 +251,25 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         n = n if n is not None else c
         return country_weight * n + (1 - country_weight) * c
 
-    # thin per-90 samples shrink toward the role baseline (270 min ≈ three
-    # matches earns half-trust; assists are the noisiest rate and need ~9
-    # matches). Profiles without minutes info (sample data) stay untouched.
+    # Predictive grounding (Poisson-Gamma): the role baseline is the prior,
+    # the measured per-90 tilts it in proportion to how informative the sample
+    # is. Prior strength = the minutes needed to expect ~3 events at the
+    # baseline rate, so rare events (a fullback's goals) need thousands of
+    # minutes to outvote the prior while common ones (passes) need almost
+    # none — zero goals in a thin sample stops reading as zero ability.
+    # Minutes counted are those of the data the blend actually uses.
     mins = profile.get("_minutes") or {}
-    total_mins = (mins.get("club") or 0) + (mins.get("country") or 0)
-    _K = {"assists": 810.0}
+    eff_mins = (country_weight * (mins.get("country") or 0)
+                + (1 - country_weight) * (mins.get("club") or 0))
+    PRIOR_EVENTS = 3.0
 
     def grounded(metric, value):
-        if not total_mins:
-            return value
-        w = total_mins / (total_mins + _K.get(metric, 270.0))
-        return w * value + (1 - w) * rc.get(metric, value)
+        if not eff_mins:
+            return value  # sample data carries no minutes info
+        prior = rc.get(metric, value)
+        k = PRIOR_EVENTS * 90.0 / max(prior, 0.02)
+        w = eff_mins / (eff_mins + k)
+        return w * value + (1 - w) * prior
 
     # team-mass normalisation (mirrors the JSX second pass): callers that see
     # the whole squad pass scales so players share the team's goal/shot budget

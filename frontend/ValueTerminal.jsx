@@ -227,14 +227,21 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   // startProb would systematically underprice every prop against the book.
   const expo = startProb <= 0 ? 0 : startProb + (1 - startProb) * 0.35;
 
-  // thin per-90 samples shrink toward the role baseline (270 min ≈ three
-  // matches earns half-trust; assists are the noisiest rate and need ~9
-  // matches). Sample data without minutes stays untouched.
-  const totalMins = (p._minutes?.club || 0) + (p._minutes?.country || 0);
+  // Predictive grounding (Poisson-Gamma, mirrors the Python engine): the role
+  // baseline is the prior, measured per-90s tilt it in proportion to how
+  // informative the sample is. Prior strength = minutes needed to expect ~3
+  // events at the baseline rate — rare events (a fullback's goals) need
+  // thousands of minutes to outvote the prior, common ones (passes) almost
+  // none. Minutes counted are those of the data the blend actually uses, so
+  // sliding to 100% country form weighs the country sample, not the total.
+  const effMins = countryWeight * (p._minutes?.country || 0) +
+    (1 - countryWeight) * (p._minutes?.club || 0);
   const grounded = (metric, v) => {
-    if (!totalMins) return v;
-    const w = totalMins / (totalMins + (metric === "assists" ? 810 : 270));
-    return w * v + (1 - w) * ROLE[pos][metric];
+    if (!effMins) return v; // sample data carries no minutes info
+    const prior = ROLE[pos][metric];
+    const k = (3 * 90) / Math.max(prior, 0.02);
+    const w = effMins / (effMins + k);
+    return w * v + (1 - w) * prior;
   };
 
   // team-mass normalisation (second pricing pass): individually-estimated
