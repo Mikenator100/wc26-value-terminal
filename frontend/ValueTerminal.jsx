@@ -574,6 +574,26 @@ function conditionalGoalFactors(matrix, preds) {
   return { fH: eh / mass / uh, fA: ea / mass / ua };
 }
 
+// structural problems that make a "multi" a lie:
+// - a leg the others already imply (HoD + away CS makes Under 2.5 redundant)
+// - a combo that collapses to one scoreline (HoD + away CS *is* 0-0)
+function sgmStructure(matrixLegs, matrix) {
+  if (matrixLegs.length < 2) return null;
+  const all = probOf(matrix, (i, j) => matrixLegs.every((l) => l.pred(i, j)));
+  if (all <= 0) return "impossible";
+  for (let k = 0; k < matrixLegs.length; k++) {
+    const rest = matrixLegs.filter((_, idx) => idx !== k);
+    const restP = probOf(matrix, (i, j) => rest.every((l) => l.pred(i, j)));
+    if (restP > 0 && all / restP >= 0.97) return `"${matrixLegs[k].label}" is already implied by the other legs`;
+  }
+  let maxCell = 0;
+  for (let i = 0; i < matrix.length; i++)
+    for (let j = 0; j < matrix.length; j++)
+      if (matrixLegs.every((l) => l.pred(i, j)) && matrix[i][j] > maxCell) maxCell = matrix[i][j];
+  if (maxCell / all >= 0.9) return "these legs collapse to a single correct score — bet that instead";
+  return null;
+}
+
 function analyseSGM(legIds, match, matrix, playerLegs = {}) {
   if (legIds.length < 2) return null;
   const matrixLegs = legIds.filter((id) => LEGS[id]).map((id) => ({ id, ...LEGS[id] }));
@@ -596,10 +616,12 @@ function analyseSGM(legIds, match, matrix, playerLegs = {}) {
   ];
   const indepProb = marginals.reduce((a, b) => a * b, 1);
 
-  // estimate the book SGM price from leg prices + correlation scaling
+  // estimate the book SGM price from leg prices + correlation scaling.
+  // synthetic leg prices floor at 1.02: 1/p/margin dips below 1.0 for
+  // near-certain legs, which is not a price any book would write
   const legBookOdds = [
-    ...matrixLegs.map((l) => legBet365Odds(l.id, match) ?? 1 / probOf(matrix, l.pred) / 1.06),
-    ...pLegs.map((l) => l.book ?? 1 / l.prob(1) / 1.08), // props carry more margin
+    ...matrixLegs.map((l) => Math.max(1.02, legBet365Odds(l.id, match) ?? 1 / probOf(matrix, l.pred) / 1.06)),
+    ...pLegs.map((l) => Math.max(1.02, l.book ?? 1 / l.prob(1) / 1.08)), // props carry more margin
   ];
   const indepBookOdds = legBookOdds.reduce((a, b) => a * b, 1);
   const estBookOdds =
@@ -613,6 +635,7 @@ function analyseSGM(legIds, match, matrix, playerLegs = {}) {
     correlation: indepProb > 0 ? jointProb / indepProb : 1, // >1 positive
     estBookOdds,
     hasPlayerLegs: pLegs.length > 0,
+    structureWarning: sgmStructure(matrixLegs, matrix),
   };
 }
 
@@ -655,9 +678,12 @@ function suggestSGMs(match, matrix, targetCenter) {
         fairOdds: r.fairOdds,
         estBookOdds: r.estBookOdds,
         edge: edge(r.estBookOdds, r.hitRate),
+        structureWarning: r.structureWarning,
       };
     })
-    .filter((c) => c.hitRate > 0.001 && isFinite(c.fairOdds));
+    // drop fake multis: redundant legs (HoD + away CS implies Under 2.5) and
+    // combos that collapse to one scoreline (HoD + away CS *is* 0-0)
+    .filter((c) => c.hitRate > 0.001 && isFinite(c.fairOdds) && !c.structureWarning);
 
   const filtered =
     targetCenter == null
@@ -1318,6 +1344,11 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                     </b>
                   </div>
                 </div>
+                {sgm.structureWarning && (
+                  <p className="vt-sgmnote" style={{ color: "var(--amber)" }}>
+                    ⚠ Not a real multi: {sgm.structureWarning}.
+                  </p>
+                )}
                 <p className="vt-sgmnote">
                   Price field shows the model estimate — paste the real figure
                   from the Bet365 bet slip for a true value read. Edge is
