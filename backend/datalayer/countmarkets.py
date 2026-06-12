@@ -14,10 +14,17 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-# default dispersion (r) by metric — smaller = fatter tail
+# default dispersion (r) by metric — smaller = fatter tail (team-level counts)
 DISP = {"corners": 10, "cards": 5, "shots": 15, "sot": 8, "offsides": 4,
         "tackles": 20, "fouls": 25, "passes": 25, "saves": 6,
         "throwins": 18, "freekicks": 14, "goalkicks": 8}
+
+# player-level dispersion, tuned to the shape of real Bet365 prop ladders:
+# their prices decay near-geometrically up the ladder (a fat NB tail, r≈3-4),
+# while near-Poisson r values priced 3+/4+ lines at absurd hundreds-to-one.
+# Mirrors the JSX engine.
+PDISP = {"shots": 3.5, "sot": 2.5, "tackles": 3.5, "fouls": 3.0,
+         "fouled": 4.0, "passes": 25, "saves": 4.0}
 
 # throw-ins: no data source exposes them and team variance is small —
 # a flat per-match prior is the honest model (≈40 total per game)
@@ -118,7 +125,7 @@ def player_markets(exp: dict) -> dict:
     mk = lambda label, p: out.__setitem__(label, _fair([(label, max(0.002, min(0.998, p)))]))
 
     if exp.get("is_gk"):
-        ds = count_dist(exp.get("saves", 0), DISP["saves"])
+        ds = count_dist(exp.get("saves", 0), PDISP["saves"])
         for n in (2, 3, 4):
             mk(f"Saves {n}+", at_least(ds, n))
         mk("To be booked", exp.get("card_prob", 0.1))
@@ -127,33 +134,34 @@ def player_markets(exp: dict) -> dict:
     g, asst = exp.get("goals", 0), exp.get("assists", 0)
     mk("Anytime goalscorer", 1 - math.exp(-g))
     mk("To score or assist", 1 - math.exp(-(g + asst)))
-    dsh = count_dist(exp.get("shots", 0), DISP["shots"])
+    dsh = count_dist(exp.get("shots", 0), PDISP["shots"])
     mk("Shots 1+", at_least(dsh, 1)); mk("Shots 2+", at_least(dsh, 2)); mk("Shots 3+", at_least(dsh, 3))
-    dso = count_dist(exp.get("sot", 0), DISP["sot"])
+    dso = count_dist(exp.get("sot", 0), PDISP["sot"])
     mk("Shots on target 1+", at_least(dso, 1)); mk("Shots on target 2+", at_least(dso, 2))
     mk("Shots on target 3+", at_least(dso, 3))
-    dtk = count_dist(exp.get("tackles", 0), DISP["tackles"])
+    dtk = count_dist(exp.get("tackles", 0), PDISP["tackles"])
     mk("Tackles 1+", at_least(dtk, 1)); mk("Tackles 2+", at_least(dtk, 2)); mk("Tackles 3+", at_least(dtk, 3))
-    dfo = count_dist(exp.get("fouls", 0), DISP["fouls"])
+    dfo = count_dist(exp.get("fouls", 0), PDISP["fouls"])
     mk("Fouls committed 1+", at_least(dfo, 1)); mk("Fouls committed 2+", at_least(dfo, 2))
     pl = max(4.5, round(exp.get("passes", 0) / 5) * 5 - 0.5)
-    mk(f"Passes over {pl}", over(count_dist(exp.get("passes", 0), DISP["passes"]), pl))
-    mk("To be fouled 1+", at_least(count_dist(exp.get("fouled", 0), 10), 1))
+    mk(f"Passes over {pl}", over(count_dist(exp.get("passes", 0), PDISP["passes"]), pl))
+    mk("To be fouled 1+", at_least(count_dist(exp.get("fouled", 0), PDISP["fouled"]), 1))
     mk("To be booked", exp.get("card_prob", 0.1))
     return out
 
 
-# role count baselines (per 90) — mirror the frontend ROLE table
+# role baselines (per 90) — mirror the frontend ROLE table; also the shrink
+# target for thin per-90 samples
 ROLE_COUNTS = {
-    "ST": {"passes": 22, "tackles": 0.4, "fouls": 1.0, "fouled": 1.3, "saves": 0},
-    "SS": {"passes": 28, "tackles": 0.6, "fouls": 1.0, "fouled": 1.2, "saves": 0},
-    "W": {"passes": 28, "tackles": 0.8, "fouls": 0.9, "fouled": 1.4, "saves": 0},
-    "CAM": {"passes": 38, "tackles": 1.0, "fouls": 1.0, "fouled": 1.5, "saves": 0},
-    "CM": {"passes": 55, "tackles": 1.8, "fouls": 1.2, "fouled": 1.1, "saves": 0},
-    "DM": {"passes": 60, "tackles": 2.5, "fouls": 1.6, "fouled": 0.9, "saves": 0},
-    "FB": {"passes": 45, "tackles": 2.0, "fouls": 1.1, "fouled": 0.8, "saves": 0},
-    "CB": {"passes": 50, "tackles": 1.4, "fouls": 0.9, "fouled": 0.5, "saves": 0},
-    "GK": {"passes": 30, "tackles": 0.1, "fouls": 0.1, "fouled": 0.2, "saves": 3.0},
+    "ST": {"shots": 3.0, "sot": 1.2, "goals": 0.55, "assists": 0.2, "passes": 22, "tackles": 0.4, "fouls": 1.0, "fouled": 1.3, "saves": 0},
+    "SS": {"shots": 2.4, "sot": 1.0, "goals": 0.45, "assists": 0.28, "passes": 28, "tackles": 0.6, "fouls": 1.0, "fouled": 1.2, "saves": 0},
+    "W": {"shots": 2.2, "sot": 0.85, "goals": 0.35, "assists": 0.3, "passes": 28, "tackles": 0.8, "fouls": 0.9, "fouled": 1.4, "saves": 0},
+    "CAM": {"shots": 1.8, "sot": 0.7, "goals": 0.3, "assists": 0.4, "passes": 38, "tackles": 1.0, "fouls": 1.0, "fouled": 1.5, "saves": 0},
+    "CM": {"shots": 1.1, "sot": 0.4, "goals": 0.15, "assists": 0.22, "passes": 55, "tackles": 1.8, "fouls": 1.2, "fouled": 1.1, "saves": 0},
+    "DM": {"shots": 0.7, "sot": 0.25, "goals": 0.08, "assists": 0.15, "passes": 60, "tackles": 2.5, "fouls": 1.6, "fouled": 0.9, "saves": 0},
+    "FB": {"shots": 0.6, "sot": 0.2, "goals": 0.06, "assists": 0.2, "passes": 45, "tackles": 2.0, "fouls": 1.1, "fouled": 0.8, "saves": 0},
+    "CB": {"shots": 0.5, "sot": 0.18, "goals": 0.07, "assists": 0.05, "passes": 50, "tackles": 1.4, "fouls": 0.9, "fouled": 0.5, "saves": 0},
+    "GK": {"shots": 0.02, "sot": 0, "goals": 0.005, "assists": 0.02, "passes": 30, "tackles": 0.1, "fouls": 0.1, "fouled": 0.2, "saves": 3.0},
 }
 _BASE_G = 1.35
 
@@ -223,20 +231,30 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
         n = n if n is not None else c
         return country_weight * n + (1 - country_weight) * c
 
+    # thin per-90 samples shrink toward the role baseline (270 min ≈ three
+    # matches earns half-trust); profiles without minutes info (sample data)
+    # keep their stated rates untouched
+    mins = profile.get("_minutes") or {}
+    total_mins = (mins.get("club") or 0) + (mins.get("country") or 0)
+    w_data = total_mins / (total_mins + 270.0) if total_mins else 1.0
+
+    def grounded(metric, value):
+        return w_data * value + (1 - w_data) * rc.get(metric, value)
+
     exp = {
-        "goals": blend("goals") * start_prob * attack,
-        "sot": blend("sot") * start_prob * attack,
-        "shots": blend("shots") * start_prob * attack,
-        "assists": blend("assists") * start_prob * attack,
-        "passes": measured("passes") * start_prob * math.sqrt(attack),
-        "tackles": measured("tackles") * start_prob * defend,
-        "fouls": measured("fouls") * start_prob * defend,
-        "fouled": measured("fouled") * start_prob * attack,
+        "goals": grounded("goals", blend("goals")) * start_prob * attack,
+        "sot": grounded("sot", blend("sot")) * start_prob * attack,
+        "shots": grounded("shots", blend("shots")) * start_prob * attack,
+        "assists": grounded("assists", blend("assists")) * start_prob * attack,
+        "passes": grounded("passes", measured("passes")) * start_prob * math.sqrt(attack),
+        "tackles": grounded("tackles", measured("tackles")) * start_prob * defend,
+        "fouls": grounded("fouls", measured("fouls")) * start_prob * defend,
+        "fouled": grounded("fouled", measured("fouled")) * start_prob * attack,
         "card_prob": blend("cards", 0.1) * defend * start_prob,
         "is_gk": pos == "GK",
     }
     if pos == "GK":
-        exp["saves"] = measured("saves") * start_prob
+        exp["saves"] = grounded("saves", measured("saves")) * start_prob
 
     if sp.get("pen"):
         p_pen = _clamp(0.18 * attack, 0.05, 0.4) * start_prob

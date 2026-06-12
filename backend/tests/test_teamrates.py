@@ -37,15 +37,19 @@ def test_team_rates():
         stats_payload(6, corners=4, cards=3, shots=11, sot=4, offsides=1, fouls=14, red=1),
     ]
     r = team_rates(6, payloads)
-    assert r["corners"] == 5.0 and r["cards"] == 2.0 and r["shots"] == 13.0
-    assert r["sot"] == 5.0 and r["offsides"] == 1.5 and r["fouls"] == 12.0
+    # 2 measured games shrink toward the priors with 4 pseudo-games:
+    # corners (10+4*5)/6 = 5.0 (measured == prior), shots (26+4*12.5)/6 = 12.67
+    assert r["corners"] == 5.0 and r["cards"] == 2.0
+    assert abs(r["shots"] - 12.67) < 0.01 and abs(r["sot"] - 4.6) < 0.01
+    assert abs(r["offsides"] - 1.83) < 0.01 and abs(r["fouls"] - 12.33) < 0.01
     assert r["_games"] == 2
     assert 12.0 <= r["tackles"] <= 21.0  # estimated from fouls, bounded
-    assert abs(r["redProb"] - 0.3) < 1e-9  # 1 red in 2 games, capped at 0.30
+    # 1 red in 2 games no longer reads as a 30%-a-game team: (1+0.2)/6 = 0.2
+    assert abs(r["redProb"] - 0.2) < 1e-9
     # team absent from every payload -> None (caller omits teamRates)
     assert team_rates(7, payloads) is None
     assert team_rates(6, []) is None
-    print(f"team rates ok (corners {r['corners']}, tackles est {r['tackles']}, redProb {r['redProb']})")
+    print(f"team rates ok (corners {r['corners']}, shots {r['shots']}, redProb {r['redProb']})")
 
 
 # --- player per-90 count rates from real API-Football blocks ---------------- #
@@ -88,10 +92,11 @@ def test_player_count_rates():
 def test_expectations_use_measured_rates():
     p = test_player_count_rates()
     exp = player_expectations(p, "CM", start_prob=1.0, team_xg=1.35, opp_xg=1.35)
-    # country side missing -> blend falls back to the club's measured 65/90,
-    # which beats the CM role baseline of 55
-    assert abs(exp["passes"] - 65.0) < 1e-6
-    assert abs(exp["tackles"] - 2.0) < 1e-6
+    # country side missing -> blend falls back to the club's measured 65/90;
+    # the big sample (3420 min) keeps it close, with a slight pull toward the
+    # CM baseline of 55
+    assert 63.5 < exp["passes"] < 65.0
+    assert 1.95 < exp["tackles"] <= 2.0
     # a profile with no count data at all still prices off role baselines
     bare = {"club": {"shots": 1.0, "sot": 0.4, "goals": 0.1, "assists": 0.2, "cards": 0.2},
             "country": {"shots": 1.0, "sot": 0.4, "goals": 0.1, "assists": 0.2, "cards": 0.2}}
@@ -141,7 +146,9 @@ class RatesProvider:
 def test_build_match_team_rates():
     m = build_match(RatesProvider(), RatesProvider.FIXTURE, league=1, season=2026)
     tr = m["teamRates"]
-    assert tr["home"]["corners"] == 7.0 and tr["away"]["corners"] == 3.0
+    # measured 7 vs 3 corners/game, shrunk toward the 5.0 prior (2 games vs 4)
+    assert tr["home"]["corners"] > 5.0 > tr["away"]["corners"]
+    assert abs(tr["home"]["corners"] - 5.67) < 0.01 and abs(tr["away"]["corners"] - 4.33) < 0.01
     assert tr["home"]["_games"] == 2  # only the finished fixtures counted
     # league-season stats are empty (0 played) -> xG anchors on the Elo
     # matchup (both fake teams are rated), tilted by recent form: the in-form

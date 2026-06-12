@@ -34,6 +34,13 @@ TACKLES_RANGE = (12.0, 21.0)
 
 RED_PROB_RANGE = (0.02, 0.30)
 
+# tournament-typical per-team-per-game priors. Small form windows produce wild
+# averages (one ill-tempered friendly reads as a 20-foul team); measured rates
+# shrink toward these with PRIOR_GAMES of pseudo-sample.
+PRIORS = {"corners": 5.0, "cards": 2.0, "shots": 12.5, "sot": 4.4,
+          "offsides": 2.0, "fouls": 12.5, "red": 0.05}
+PRIOR_GAMES = 4.0
+
 FINISHED = {"FT", "AET", "PEN"}
 
 
@@ -103,16 +110,22 @@ def team_rates(team_id: int, stats_payloads: list[list[dict]]) -> Optional[dict]
     if not games:
         return None
 
-    avg = lambda k, default: round(sums.get(k, default * games) / games, 2)
-    fouls = avg("fouls", 12.0)
+    # shrink toward tournament priors: measured games vs PRIOR_GAMES of
+    # pseudo-sample, so a 1-2 game window can't set extreme rates outright
+    def shrunk(k):
+        measured = sums.get(k, PRIORS[k] * games)
+        return round((measured + PRIORS[k] * PRIOR_GAMES) / (games + PRIOR_GAMES), 2)
+
+    fouls = shrunk("fouls")
     tackles = round(min(TACKLES_RANGE[1], max(TACKLES_RANGE[0], fouls * TACKLES_PER_FOUL)), 2)
-    red_prob = round(min(RED_PROB_RANGE[1], max(RED_PROB_RANGE[0], sums.get("red", 0.0) / games)), 3)
+    red_raw = (sums.get("red", 0.0) + PRIORS["red"] * PRIOR_GAMES) / (games + PRIOR_GAMES)
+    red_prob = round(min(RED_PROB_RANGE[1], max(RED_PROB_RANGE[0], red_raw)), 3)
     return {
-        "corners": avg("corners", 5.0),
-        "cards": avg("cards", 1.8),
-        "shots": avg("shots", 12.0),
-        "sot": avg("sot", 4.3),
-        "offsides": avg("offsides", 1.8),
+        "corners": shrunk("corners"),
+        "cards": shrunk("cards"),
+        "shots": shrunk("shots"),
+        "sot": shrunk("sot"),
+        "offsides": shrunk("offsides"),
         "tackles": tackles,
         "fouls": fouls,
         "redProb": red_prob,

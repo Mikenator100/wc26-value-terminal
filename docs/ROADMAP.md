@@ -117,7 +117,10 @@
 - Team tackles aren't in `fixtures/statistics`; `teamRates.tackles` is estimated
   from fouls (~1.4×, bounded 12–21 per game).
 - Form windows early in the tournament are friendlies/qualifiers against mixed
-  opposition — rates and the xG fallback inherit that schedule bias.
+  opposition — count rates inherit that schedule bias (xG no longer does: it
+  anchors on market prices or Elo). Prior-shrinkage bounds the damage.
+- Player-prop dispersion (PDISP r≈3-4) is tuned by eye to one Bet365 ladder
+  CSV; rerun `datalayer.tuneprops` against each new props CSV and adjust.
 - No referee-specific card adjustment yet (a referee multiplier hook exists in spirit).
 - Opponent strength uses team xG as the single signal; no per-zone or matchup detail.
 - Bet365 prop prices aren't in the aggregator feed the way main markets are — props

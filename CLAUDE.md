@@ -131,6 +131,13 @@ exact feed JSON contract (the integration boundary between the two halves).
 - **Count markets** (corners, cards, shots, SOT, offsides, tackles, fouls; player
   shots/SOT/tackles/fouls/passes/saves) use a **negative binomial** distribution,
   because these counts are overdispersed and Poisson underprices the tails.
+  **Player dispersion is tuned to real Bet365 ladder shapes** (r≈3-4 — their
+  prices decay near-geometrically; `PDISP`/JSX `PD`, kept in sync); team-level
+  counts keep tighter r. Small samples shrink: team rates toward
+  tournament-typical priors (4 pseudo-games, `teamrates.PRIORS`), player
+  per-90s toward role baselines (270-minute half-trust, `grounded()` in both
+  engines). `python -m datalayer.tuneprops feed.json` reports model-vs-book
+  bias per prop family whenever a props CSV is matched — the tuning loop.
 - **Player props**: blend club + country per-90 rates (kept separate on purpose)
   with the blend **shrunk toward the better-sampled source** (minutes-weighted;
   the country-weight slider states a preference, the data earns its say),

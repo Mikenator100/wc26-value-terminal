@@ -223,15 +223,21 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   // startProb would systematically underprice every prop against the book.
   const expo = startProb <= 0 ? 0 : startProb + (1 - startProb) * 0.35;
 
-  let expGoals = blend("goals") * expo * attackF;
-  let expSot = blend("sot") * expo * attackF;
-  let expShots = blend("shots") * expo * attackF;
-  let expAssists = blend("assists") * expo * attackF;
-  const expPasses = measured("passes") * expo * Math.sqrt(attackF);
-  const expTackles = measured("tackles") * expo * defenceF;
-  const expFouls = measured("fouls") * expo * defenceF;
-  const expFouled = measured("fouled") * expo * attackF;
-  const expSaves = measured("saves") * expo;
+  // thin per-90 samples shrink toward the role baseline (270 min ≈ three
+  // matches earns half-trust); sample data without minutes stays untouched
+  const totalMins = (p._minutes?.club || 0) + (p._minutes?.country || 0);
+  const wData = totalMins ? totalMins / (totalMins + 270) : 1;
+  const grounded = (metric, v) => wData * v + (1 - wData) * ROLE[pos][metric];
+
+  let expGoals = grounded("goals", blend("goals")) * expo * attackF;
+  let expSot = grounded("sot", blend("sot")) * expo * attackF;
+  let expShots = grounded("shots", blend("shots")) * expo * attackF;
+  let expAssists = grounded("assists", blend("assists")) * expo * attackF;
+  const expPasses = grounded("passes", measured("passes")) * expo * Math.sqrt(attackF);
+  const expTackles = grounded("tackles", measured("tackles")) * expo * defenceF;
+  const expFouls = grounded("fouls", measured("fouls")) * expo * defenceF;
+  const expFouled = grounded("fouled", measured("fouled")) * expo * attackF;
+  const expSaves = grounded("saves", measured("saves")) * expo;
   const cardFactor = Math.sqrt(ROLE[pos].cards / ROLE[p.clubRole].cards);
   let cardP =
     (countryWeight * p.country.cards + (1 - countryWeight) * p.club.cards) *
@@ -256,12 +262,16 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
     return { name, hitRate: pr, fairOdds: 1 / pr };
   };
 
+  // player dispersion tuned to real Bet365 ladder shapes (fat NB tails,
+  // r≈3-4) — near-Poisson r values priced deep lines at absurd hundreds.
+  // Mirrors PDISP in datalayer/countmarkets.py.
+  const PD = { shots: 3.5, sot: 2.5, tackles: 3.5, fouls: 3.0, fouled: 4, passes: 25, saves: 4 };
   let props;
   if (pos === "GK") {
     props = [
-      mk("Saves 2+", atLeast(2, expSaves, 6)),
-      mk("Saves 3+", atLeast(3, expSaves, 6)),
-      mk("Saves 4+", atLeast(4, expSaves, 6)),
+      mk("Saves 2+", atLeast(2, expSaves, PD.saves)),
+      mk("Saves 3+", atLeast(3, expSaves, PD.saves)),
+      mk("Saves 4+", atLeast(4, expSaves, PD.saves)),
       mk("To be booked", cardP),
     ];
   } else {
@@ -269,19 +279,19 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
     props = [
       mk("Anytime goalscorer", 1 - Math.exp(-expGoals)),
       mk("To score or assist", 1 - Math.exp(-(expGoals + expAssists))),
-      mk("Shots 1+", atLeast(1, expShots, 8)),
-      mk("Shots 2+", atLeast(2, expShots, 8)),
-      mk("Shots 3+", atLeast(3, expShots, 8)),
-      mk("Shots on target 1+", atLeast(1, expSot, 6)),
-      mk("Shots on target 2+", atLeast(2, expSot, 6)),
-      mk("Shots on target 3+", atLeast(3, expSot, 6)),
-      mk("Tackles 1+", atLeast(1, expTackles, 10)),
-      mk("Tackles 2+", atLeast(2, expTackles, 10)),
-      mk("Tackles 3+", atLeast(3, expTackles, 10)),
-      mk("Fouls committed 1+", atLeast(1, expFouls, 12)),
-      mk("Fouls committed 2+", atLeast(2, expFouls, 12)),
-      mk(`Passes over ${passLine}`, distOver(countDist(expPasses, 25), passLine)),
-      mk("To be fouled 1+", atLeast(1, expFouled, 10)),
+      mk("Shots 1+", atLeast(1, expShots, PD.shots)),
+      mk("Shots 2+", atLeast(2, expShots, PD.shots)),
+      mk("Shots 3+", atLeast(3, expShots, PD.shots)),
+      mk("Shots on target 1+", atLeast(1, expSot, PD.sot)),
+      mk("Shots on target 2+", atLeast(2, expSot, PD.sot)),
+      mk("Shots on target 3+", atLeast(3, expSot, PD.sot)),
+      mk("Tackles 1+", atLeast(1, expTackles, PD.tackles)),
+      mk("Tackles 2+", atLeast(2, expTackles, PD.tackles)),
+      mk("Tackles 3+", atLeast(3, expTackles, PD.tackles)),
+      mk("Fouls committed 1+", atLeast(1, expFouls, PD.fouls)),
+      mk("Fouls committed 2+", atLeast(2, expFouls, PD.fouls)),
+      mk(`Passes over ${passLine}`, distOver(countDist(expPasses, PD.passes), passLine)),
+      mk("To be fouled 1+", atLeast(1, expFouled, PD.fouled)),
       mk("To be booked", cardP),
     ];
   }
@@ -962,9 +972,9 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
         [
           ["ags", "to score", (f) => clamp(1 - Math.exp(-p.exp.goals * env(f)), 0.002, 0.998),
            p.bookOdds?.["Anytime goalscorer"]],
-          ["sot1", "SOT 1+", (f) => clamp(atLeast(1, p.exp.sot * env(f), 6), 0.002, 0.998),
+          ["sot1", "SOT 1+", (f) => clamp(atLeast(1, p.exp.sot * env(f), 2.5), 0.002, 0.998),
            p.bookOdds?.["Shots on target 1+"]],
-          ["sh2", "Shots 2+", (f) => clamp(atLeast(2, p.exp.shots * env(f), 8), 0.002, 0.998),
+          ["sh2", "Shots 2+", (f) => clamp(atLeast(2, p.exp.shots * env(f), 3.5), 0.002, 0.998),
            p.bookOdds?.["Shots 2+"]],
         ].forEach(([k, lbl, prob, book]) => {
           out[`pl|${p.name}|${k}`] = {
