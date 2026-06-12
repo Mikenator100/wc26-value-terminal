@@ -133,6 +133,12 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
             "calibration_table": calibration_table(settled),
             "segments": segment_stats(settled),
             "open": len(led.open_bets()),
+            # newest first, for the Track-record open-bets list
+            "open_bets": [
+                {k: b.get(k) for k in ("match_id", "market", "selection",
+                                       "model_prob", "price", "stake", "ts")}
+                for b in sorted(led.open_bets(), key=lambda b: -(b.get("ts") or 0))[:25]
+            ],
         }
 
     @app.get("/api/performance")

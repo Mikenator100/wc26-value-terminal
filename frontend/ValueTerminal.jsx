@@ -1051,6 +1051,37 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const catalog = useMemo(() => deriveCatalog(matrix, xgHome, xgAway, base.teamRates), [matrix, xgHome, xgAway, base]);
   const [catBook, setCatBook] = useState({});
   const [openGroup, setOpenGroup] = useState("Result");
+
+  // best value across EVERYTHING priced: main markets, the catalog (CSV or
+  // typed prices), and player props — one ranked board
+  const valuePicks = useMemo(() => {
+    const picks = bestBets.map((o) => ({ ...o, src: "Main" }));
+    catalog.forEach((g) =>
+      g.markets.forEach((m) =>
+        m.outcomes.forEach((o) => {
+          const raw = catBook[`${g.group}|${m.name}|${o.label}`];
+          const price = Number(raw !== undefined ? raw : base.bookPrices?.[`${m.name}|${o.label}`]);
+          if (!(price > 1) || !(o.prob > 0)) return;
+          const e = price * o.prob - 1;
+          if (e > 0.005)
+            picks.push({ market: m.name, label: o.label, bet365: price, hitRate: o.prob,
+                         edge: e, kellyFull: kelly(price, o.prob), src: "Catalog" });
+        })
+      )
+    );
+    players.filter((p) => p.inXI).forEach((pl) =>
+      pl.props.forEach((pr) => {
+        const raw = playerBook[`${pl.name}|${pr.name}`];
+        const price = Number(raw !== undefined ? raw : pl.bookOdds?.[pr.name]);
+        if (!(price > 1)) return;
+        const e = price * pr.hitRate - 1;
+        if (e > 0.005)
+          picks.push({ market: pl.name, label: pr.name, bet365: price, hitRate: pr.hitRate,
+                       edge: e, kellyFull: kelly(price, pr.hitRate), src: "Player" });
+      })
+    );
+    return picks.sort((a, b) => b.edge - a.edge).slice(0, 6);
+  }, [bestBets, catalog, catBook, base, players, playerBook]);
   const suggestions = useMemo(
     () => suggestSGMs(base, matrix, target),
     [base, matrix, target]
@@ -1183,16 +1214,16 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                 ranked by edge · stake = {Math.round(kellyFrac * 100)}% Kelly
               </span>
             </div>
-            {bestBets.length === 0 ? (
+            {valuePicks.length === 0 ? (
               <div className="vt-empty">
                 Nothing prices above fair right now. Lower the model weight or
                 wait for the line to move.
               </div>
             ) : (
               <div className="vt-bestrow">
-                {bestBets.map((o, i) => (
+                {valuePicks.map((o, i) => (
                   <div className="vt-card" key={i}>
-                    <div className="vt-cardmkt">{o.market}</div>
+                    <div className="vt-cardmkt">{o.src === "Player" ? "Player prop" : o.market}{o.src === "Player" ? ` · ${o.market}` : ""}</div>
                     <div className="vt-cardlabel">{o.label}</div>
                     <div className="vt-cardodds">{od(o.bet365)}</div>
                     <div className="vt-cardrow">
@@ -1580,6 +1611,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                   <span className="vt-num">Fair</span>
                                   <span className="vt-num">Bet365</span>
                                   <span className="vt-num">Edge</span>
+                                  <span className="vt-num">Stake</span>
                                 </div>
                                 {fam.props.map((pr) => {
                                   const key = `${p.name}|${pr.name}`;
@@ -1614,6 +1646,11 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                         style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}
                                       >
                                         {e == null ? "—" : signedPct(e)}
+                                      </span>
+                                      <span className="vt-num vt-stake">
+                                        {bookOdds && e > 0
+                                          ? `$${(kelly(bookOdds, pr.hitRate) * kellyFrac * stake).toFixed(2)}`
+                                          : "—"}
                                       </span>
                                     </div>
                                   );
@@ -1672,6 +1709,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                 <span className="vt-num">Fair</span>
                                 <span className="vt-num">Bet365</span>
                                 <span className="vt-num">Edge</span>
+                                <span className="vt-num">Stake</span>
                               </div>
                               {m.outcomes.map((o) => {
                                 const key = `${g.group}|${m.name}|${o.label}`;
@@ -1696,6 +1734,11 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                                     />
                                     <span className="vt-num" style={{ color: e == null ? "var(--muted)" : edgeColor(e) }}>
                                       {e == null ? "—" : signedPct(e)}
+                                    </span>
+                                    <span className="vt-num vt-stake">
+                                      {book && e > 0
+                                        ? `$${(kelly(book, o.prob) * kellyFrac * stake).toFixed(2)}`
+                                        : "—"}
                                     </span>
                                   </div>
                                 );
@@ -2026,7 +2069,30 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, pape
           ))}
         </div>
 
-        {(liveOpen.length > 0 || liveSettled.length > 0) && (
+        {showPaper && (paperRemote.open_bets?.length || 0) > 0 && (
+          <section className="vt-sgm">
+            <div className="vt-mkthead">
+              <span>Open paper picks</span>
+              <span className="vt-juice">auto-logged · settle automatically as fixtures finish</span>
+            </div>
+            <div className="sess-list">
+              {paperRemote.open_bets.map((b, i) => (
+                <div className="sess-row" key={i}>
+                  <div className="sess-meta">
+                    <span className="sess-fix">{b.match_id}</span>
+                    <span className="sess-sel">{b.market} — {b.selection}</span>
+                  </div>
+                  <span className="vt-num">{pct(b.model_prob)}</span>
+                  <span className="vt-num">{Number(b.price).toFixed(2)}</span>
+                  <span className="vt-num">{b.stake}u</span>
+                  <span className="perf-status s-open" style={{ textAlign: "right" }}>open</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!showPaper && (liveOpen.length > 0 || liveSettled.length > 0) && (
           <section className="vt-sgm">
             <div className="vt-mkthead">
               <span>Your bets this session</span>
@@ -2356,7 +2422,7 @@ const CSS = `
 .cat-table{display:flex;flex-direction:column;}
 .cat-row--head{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
 .cat-row--head .vt-num{font-family:'Space Grotesk',sans-serif;font-size:9px;}
-.cat-row{display:grid;grid-template-columns:1.4fr .7fr .7fr .85fr .8fr;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);}
+.cat-row{display:grid;grid-template-columns:1.4fr .6fr .6fr .8fr .7fr .6fr;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);}
 .cat-row:last-child{border-bottom:none;}
 .cat-olabel{font-size:13px;}
 .cat-hit{color:var(--bone);}
@@ -2497,7 +2563,7 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-sptag.fk{background:rgba(226,165,60,.18);color:var(--amber);border:1px solid var(--amber);}
 .vt-poschip i{font-style:normal;color:var(--muted);font-weight:400;font-size:10px;}
 .vt-proptable{display:flex;flex-direction:column;}
-.vt-prow{display:grid;grid-template-columns:1.5fr .7fr .7fr .85fr .8fr;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--line);}
+.vt-prow{display:grid;grid-template-columns:1.5fr .6fr .6fr .8fr .7fr .6fr;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--line);}
 .vt-prow:last-child{border-bottom:none;}
 .vt-prow--head{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
 .vt-prow--head .vt-num{font-family:'Space Grotesk',sans-serif;}
