@@ -112,12 +112,11 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
         out = Settler(ledger, results).settle_open()
         return jsonify(out)
 
-    @app.get("/api/performance")
-    def perf():
-        settled = ledger.settled()
+    def _perf_payload(led: Ledger) -> dict:
+        settled = led.settled()
         m = performance(settled)
         cal = fit_calibrator(settled)
-        return jsonify({
+        return {
             # profitability is reported first and on equal footing with hit rate
             "profitability": {
                 "pnl": m.get("pnl"),
@@ -133,8 +132,21 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
             "calibration_active": cal.active,
             "calibration_table": calibration_table(settled),
             "segments": segment_stats(settled),
-            "open": len(ledger.open_bets()),
-        })
+            "open": len(led.open_bets()),
+        }
+
+    @app.get("/api/performance")
+    def perf():
+        return jsonify(_perf_payload(ledger))
+
+    @app.get("/api/paper/performance")
+    def paper_perf():
+        # the auto-logged paper ledger, written by the jobs loop
+        paper_db = os.environ.get(
+            "PAPER_DB", os.path.join(os.path.dirname(feed_path) or ".", "paper.db"))
+        if not os.path.exists(paper_db):
+            return jsonify({"n": 0, "open": 0})
+        return jsonify(_perf_payload(Ledger(paper_db)))
 
     return app
 
@@ -160,6 +172,32 @@ def _start_feed_thread() -> None:
 
 if os.environ.get("ENABLE_FEED_JOB") and os.environ.get("API_FOOTBALL_KEY"):
     _start_feed_thread()
+
+
+def _start_keep_awake() -> None:
+    """Render's free instance sleeps after ~15 idle minutes, which also stops
+    the in-process scheduler (no snapshots, no paper settles). A request to
+    our own public URL counts as inbound traffic and keeps it awake; the free
+    750 instance-hours/month cover a full month of 24/7."""
+    import threading
+    import time as _time
+    import requests
+
+    url = os.environ["RENDER_EXTERNAL_URL"].rstrip("/")
+
+    def loop():
+        while True:
+            _time.sleep(600)
+            try:
+                requests.get(f"{url}/api/health", timeout=20)
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, daemon=True, name="keepawake").start()
+
+
+if os.environ.get("RENDER_EXTERNAL_URL") and os.environ.get("KEEP_AWAKE", "1") != "0":
+    _start_keep_awake()
 
 
 if __name__ == "__main__":

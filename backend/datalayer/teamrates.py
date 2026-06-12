@@ -37,13 +37,20 @@ RED_PROB_RANGE = (0.02, 0.30)
 FINISHED = {"FT", "AET", "PEN"}
 
 
-def form_goal_averages(team_id: int, fixtures: list[dict]) -> Optional[tuple[float, float]]:
+def form_goal_averages(team_id: int, fixtures: list[dict],
+                       elo_factor=None) -> Optional[tuple[float, float]]:
     """Per-game (goals for, goals against) over recent finished fixtures.
 
     Used as the xG fallback early in a tournament, when the league-season
     statistics endpoint has no games to average yet.
+
+    `elo_factor(opponent_name) -> float` weights each match by opposition
+    quality: goals scored against a weak side are discounted (factor < 1) and
+    goals conceded to them count worse (divided by the same factor). Without
+    it, a 3-0 over El Salvador reads the same as 3-0 over France.
     """
-    gf = ga = games = 0
+    gf = ga = 0.0
+    games = 0
     for fx in fixtures or []:
         if ((fx.get("fixture") or {}).get("status") or {}).get("short") not in FINISHED:
             continue
@@ -51,10 +58,13 @@ def form_goal_averages(team_id: int, fixtures: list[dict]) -> Optional[tuple[flo
         gh, gaw = goals.get("home"), goals.get("away")
         if gh is None or gaw is None:
             continue
-        if ((fx.get("teams") or {}).get("home") or {}).get("id") == team_id:
-            gf, ga = gf + gh, ga + gaw
-        else:
-            gf, ga = gf + gaw, ga + gh
+        teams = fx.get("teams") or {}
+        is_home = (teams.get("home") or {}).get("id") == team_id
+        mine, theirs = (gh, gaw) if is_home else (gaw, gh)
+        opp_name = ((teams.get("away") if is_home else teams.get("home")) or {}).get("name", "")
+        f = elo_factor(opp_name) if elo_factor else 1.0
+        gf += mine * f
+        ga += theirs / f
         games += 1
     if not games:
         return None

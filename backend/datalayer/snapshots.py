@@ -20,11 +20,31 @@ from typing import Optional
 
 MAX_GOALS = 10
 
+# Dixon-Coles low-score correction: independent Poisson misprices draws and
+# low-scoring games; tau reweights the 0-0/1-0/0-1/1-1 cells (rho < 0 adds
+# mass to 0-0 and 1-1). Mirrors the JSX engine; rho from the literature.
+DC_RHO = -0.13
+
+
+def _dc_tau(i: int, j: int, lh: float, la: float, rho: float = DC_RHO) -> float:
+    if i == 0 and j == 0:
+        return 1 - lh * la * rho
+    if i == 0 and j == 1:
+        return 1 + lh * rho
+    if i == 1 and j == 0:
+        return 1 + la * rho
+    if i == 1 and j == 1:
+        return 1 - rho
+    return 1.0
+
 
 def score_matrix(lam_home: float, lam_away: float, max_goals: int = MAX_GOALS) -> list[list[float]]:
     ph = [math.exp(-lam_home) * lam_home ** i / math.factorial(i) for i in range(max_goals + 1)]
     pa = [math.exp(-lam_away) * lam_away ** j / math.factorial(j) for j in range(max_goals + 1)]
-    return [[ph[i] * pa[j] for j in range(max_goals + 1)] for i in range(max_goals + 1)]
+    m = [[ph[i] * pa[j] * _dc_tau(i, j, lam_home, lam_away) for j in range(max_goals + 1)]
+         for i in range(max_goals + 1)]
+    total = sum(sum(row) for row in m) or 1.0
+    return [[x / total for x in row] for row in m]
 
 
 def result_probs(m: list[list[float]]) -> dict[str, float]:

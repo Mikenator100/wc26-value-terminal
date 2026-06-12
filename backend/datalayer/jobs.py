@@ -87,18 +87,76 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
 
     # record an odds/model snapshot per cycle — the backtest's data source
     # (the last snapshot before kickoff doubles as the closing line)
-    history = os.environ.get(
-        "HISTORY_PATH", os.path.join(os.path.dirname(feed_path) or ".", "history.jsonl"))
+    rows: list[dict] = []
     try:
-        from .snapshots import append_snapshots
-        n = append_snapshots(history, feed)
-        if n:
-            print(f"snapshot: {n} outcomes -> {history}")
+        from .snapshots import snapshot_feed
+        rows = snapshot_feed(feed)
+        if rows:
+            with open(_history_path(), "a") as f:
+                for r in rows:
+                    f.write(json.dumps(r) + "\n")
+            print(f"snapshot: {len(rows)} outcomes -> {_history_path()}")
     except Exception as e:
         print(f"snapshot skipped: {e}")
 
+    # paper-trade the strategy: log every qualifying pick into a separate
+    # ledger (1u flat, no money) so calibration and segment trust accumulate
+    # settled volume fast — the betlog needs ~50 settled bets to switch on
+    if rows and _env_int("PAPER_BETS", 1):
+        try:
+            from .betlog import Ledger
+            from .backtest import pick_paper_bets
+            paper = Ledger(_paper_db_path())
+            existing = {(b["match_id"], b["market"], b["selection"]) for b in paper.all()}
+            logged = 0
+            picks = pick_paper_bets(
+                rows,
+                weight=float(os.environ.get("PAPER_WEIGHT", "") or 0.3),
+                threshold=float(os.environ.get("PAPER_EDGE", "") or 0.03),
+            )
+            for p in picks:
+                key = (p["match_id"], p["market"], p["selection"])
+                if key in existing:
+                    continue
+                paper.record(match_id=p["match_id"], market=p["market"],
+                             selection=p["selection"], model_prob=p["model_prob"],
+                             price=p["price"], stake=1.0, bankroll=100.0)
+                existing.add(key)
+                logged += 1
+            if logged:
+                print(f"paper: logged {logged} picks -> {_paper_db_path()}")
+        except Exception as e:
+            print(f"paper logging skipped: {e}")
+
     _settle()
     return len(feed)
+
+
+def _data_dir() -> str:
+    return os.path.dirname(os.environ.get("FEED_PATH", "feed.json")) or "."
+
+
+def _history_path() -> str:
+    return os.environ.get("HISTORY_PATH", os.path.join(_data_dir(), "history.jsonl"))
+
+
+def _paper_db_path() -> str:
+    return os.environ.get("PAPER_DB", os.path.join(_data_dir(), "paper.db"))
+
+
+def _closing_lookup_from_history(history_path: str):
+    """match (match_id, selection label) -> last recorded bet365 price."""
+    index: dict[tuple, float] = {}
+    try:
+        with open(history_path) as f:
+            for line in f:
+                r = json.loads(line)
+                price = r.get("bet365") or r.get("pinnacle")
+                if price:
+                    index[(r.get("match_id"), r.get("label"))] = price
+    except FileNotFoundError:
+        pass
+    return lambda match_id, market, selection: index.get((match_id, selection))
 
 
 def _settle() -> None:
@@ -120,6 +178,23 @@ def _settle() -> None:
             print(f"auto-settle direct: {out}")
     except Exception as e:
         print(f"auto-settle skipped: {e}")
+
+    # the paper ledger always settles locally (it lives in this container),
+    # with the closing price looked up from the snapshot history -> CLV
+    try:
+        if os.path.exists(_paper_db_path()):
+            from .betlog import Ledger
+            from .settler import Settler, ApiFootballResults
+            provider = ApiFootballProvider(
+                os.environ["API_FOOTBALL_KEY"],
+                cache=FileCache(os.environ.get("CACHE_DIR", ".cache")),
+            )
+            out = Settler(Ledger(_paper_db_path()), ApiFootballResults(provider),
+                          closing_lookup=_closing_lookup_from_history(_history_path())).settle_open()
+            if out.get("settled") or out.get("skipped"):
+                print(f"paper settle: {out}")
+    except Exception as e:
+        print(f"paper settle skipped: {e}")
 
 
 def run_loop() -> None:

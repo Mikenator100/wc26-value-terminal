@@ -153,6 +153,39 @@ def test_build_match_team_rates():
           f"form xg {m['xgHome']}-{m['xgAway']})")
 
 
+def test_elo_weighting():
+    from datalayer.elo import rating, goal_factor, load_table
+    from datalayer.teamrates import form_goal_averages
+    table = load_table()
+    assert rating("El Salvador", table) < rating("France", table)
+    assert goal_factor(rating("El Salvador", table)) < 1.0 < goal_factor(rating("France", table))
+    assert goal_factor(None) == 1.0  # unknown opponent stays neutral
+    # same 2-0 wins, but against a minnow vs a giant
+    def fx(opp):
+        return {"fixture": {"id": 1, "status": {"short": "FT"}},
+                "teams": {"home": {"id": 6, "name": "Us"}, "away": {"id": 9, "name": opp}},
+                "goals": {"home": 2, "away": 0}}
+    factor = lambda opp: goal_factor(rating(opp, table))
+    weak_gf, _ = form_goal_averages(6, [fx("El Salvador")], elo_factor=factor)
+    strong_gf, _ = form_goal_averages(6, [fx("France")], elo_factor=factor)
+    assert weak_gf < 2.0 < strong_gf
+    print(f"elo weighting ok (2-0 vs ELS -> gf {weak_gf}, vs FRA -> gf {strong_gf})")
+
+
+def test_effective_country_weight():
+    from datalayer.countmarkets import effective_country_weight
+    # thin international sample loses say against a big club sample
+    p = {"_minutes": {"club": 3000, "country": 300}}
+    w = effective_country_weight(p, 0.6)
+    assert w < 0.45
+    # both well-sampled -> close to the stated preference
+    p2 = {"_minutes": {"club": 3000, "country": 2500}}
+    assert abs(effective_country_weight(p2, 0.6) - 0.6) < 0.05
+    # no minutes info (sample data) -> unchanged
+    assert effective_country_weight({}, 0.6) == 0.6
+    print(f"effective weight ok (thin country {w:.2f}, no info 0.60)")
+
+
 class AutoLineupProvider(RatesProvider):
     """RatesProvider + a roster and recent confirmed XIs for the home side."""
 
@@ -197,5 +230,7 @@ if __name__ == "__main__":
     test_player_count_rates()
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
+    test_elo_weighting()
+    test_effective_country_weight()
     test_build_match_auto_lineups()
     print("\nALL TEAM-RATE TESTS PASSED\n")

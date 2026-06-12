@@ -73,13 +73,33 @@
   See `DEPLOY.md` for the push-to-GitHub flow and the free-tier caveats
   (instance sleeps when idle; SQLite resets on redeploys without a paid disk).
 
+- **Model accuracy pass (June 2026)** — Dixon-Coles low-score correction in
+  both engines (rho=-0.13); Elo-weighted form goals (`elo.py`, baked snapshot
+  + `ELO_JSON` override) so friendly schedules stop inflating xG;
+  minutes-weighted club/country blending (sample size earns the say, the
+  slider states the preference); void-aware prop exposure.
+- **Paper trader** — every feed cycle auto-logs qualifying picks (blend vs
+  sharp, `PAPER_EDGE` threshold, 1u flat) into a separate paper ledger,
+  settles them with closing prices from the snapshot history, and serves
+  `/api/paper/performance`; Track record gets a My bets / Paper trader toggle.
+  Exists to feed the calibrator (needs ~50 settled) without staking.
+- **Player props in SGMs** — to-score / SOT / shots legs in the builder,
+  repriced in the conditional goal environment of the selected match legs
+  (positive correlation with Overs captured; conditional independence
+  approximation flagged in the UI).
+- **Keep-awake** — the service self-pings `RENDER_EXTERNAL_URL` every 10 min
+  (`KEEP_AWAKE=0` to disable); 750 free instance-hours cover 24/7, and the
+  scheduler keeps recording snapshots instead of sleeping.
+
 ## Next (in priority order)
 
 1. **Accumulate snapshot history, then run the backtest** — the evaluator is
    built; it needs days of recorded cycles across many matches to mean
-   anything.
+   anything. The paper ledger fills the calibrator on the same timeline.
 2. **Persistent ledger in the cloud** — paid Render disk or Postgres, once the
-   bet history is worth keeping.
+   bet/paper history is worth keeping (it currently resets on redeploys).
+3. **Player minutes model** — replace the 0.35 sub-share constant with
+   per-player expected minutes from recent appearance patterns.
 
 ## Backlog / ideas
 

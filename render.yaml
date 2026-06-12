@@ -43,6 +43,12 @@ services:
         value: /app/props/bet365_worldcup_master_props.csv
       - key: CACHE_DIR
         value: /data/.cache
+      - key: KEEP_AWAKE
+        value: "1"               # self-ping so the scheduler keeps recording
+      - key: PAPER_BETS
+        value: "1"               # auto-log model picks into the paper ledger
+      - key: PAPER_EDGE
+        value: "0.03"
 #    disk:                       # paid instance only — persistent ledger
 #      name: ledger
 #      mountPath: /data

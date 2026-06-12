@@ -81,8 +81,12 @@ def _games_played(team_stats: dict) -> int:
 
 
 def _form_stats(team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
-    """Synthesize the goals-average shape team_lambdas reads, from recent form."""
-    fg = form_goal_averages(team_id, recent_fixtures)
+    """Synthesize the goals-average shape team_lambdas reads, from recent form
+    weighted by opponent Elo (friendlies against minnows stop inflating xG)."""
+    from .elo import load_table, rating, goal_factor
+    table = load_table()
+    fg = form_goal_averages(team_id, recent_fixtures,
+                            elo_factor=lambda opp: goal_factor(rating(opp, table)))
     if not fg:
         return None
     return {"goals": {"for": {"average": {"total": fg[0]}},

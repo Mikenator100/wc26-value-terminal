@@ -165,6 +165,25 @@ def _clamp(x, lo, hi):
 # minutes a non-starter plays *when he does appear* (sub ~30'), as a share of 90
 _SUB_MINUTES_SHARE = 0.35
 
+# sample-size half-life for the club/country blend: a source with 540 measured
+# minutes (~6 matches) earns half its full say
+_CONF_MINUTES = 540.0
+
+
+def effective_country_weight(profile: dict, country_weight: float) -> float:
+    """Shrink the club/country blend toward the better-sampled source.
+
+    The slider weight states a *preference* (international form matters more
+    here); this scales each side's say by how much data backs it, so 300
+    international minutes can't outvote 3000 club minutes. Without minutes
+    info (sample data) the preference passes through unchanged.
+    """
+    mins = profile.get("_minutes") or {}
+    conf = lambda m: m / (m + _CONF_MINUTES) if m else 0.0
+    wc = country_weight * conf(mins.get("country", 0))
+    wk = (1 - country_weight) * conf(mins.get("club", 0))
+    return wc / (wc + wk) if (wc + wk) > 0 else country_weight
+
 
 def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: float,
                         opp_xg: float, set_pieces: Optional[dict] = None,
@@ -183,6 +202,7 @@ def player_expectations(profile: dict, pos: str, start_prob: float, team_xg: flo
     attack = _clamp(team_xg / _BASE_G, 0.6, 1.7)
     defend = _clamp(opp_xg / _BASE_G, 0.6, 1.7)
     start_prob = 0.0 if start_prob <= 0 else start_prob + (1 - start_prob) * _SUB_MINUTES_SHARE
+    country_weight = effective_country_weight(profile, country_weight)
     sp = set_pieces or {}
     club, country = profile.get("club", {}), profile.get("country", {})
 

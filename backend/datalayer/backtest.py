@@ -95,6 +95,31 @@ def evaluate(snapshots: list[dict], results: dict[str, tuple[int, int]],
     }
 
 
+# snapshot market key -> ledger market name, phrased so settler.resolve_outcome
+# recognises it ("result" / "goal" / "both teams to score" keywords)
+PAPER_MARKET_NAMES = {"1x2": "Match result", "ou25": "Total goals O/U", "btts": "Both teams to score"}
+
+
+def pick_paper_bets(rows: list[dict], weight: float = 0.3, threshold: float = 0.03) -> list[dict]:
+    """The terminal's strategy as an automatic paper trader: blend model with
+    sharp, flag every outcome whose Bet365 price clears the edge threshold.
+    Feeding these through the ledger gives the calibrator settled volume
+    without staking anything."""
+    picks = []
+    for r in rows:
+        mp, sp, price = r.get("model_prob"), r.get("sharp_prob"), r.get("bet365")
+        name = PAPER_MARKET_NAMES.get(r.get("market"))
+        if mp is None or sp is None or not price or not name:
+            continue
+        blended = weight * mp + (1 - weight) * sp
+        edge = price * blended - 1
+        if edge >= threshold:
+            picks.append({"match_id": r["match_id"], "market": name,
+                          "selection": r["label"], "model_prob": round(blended, 5),
+                          "price": price, "edge": round(edge, 4)})
+    return picks
+
+
 def _load_results_from_api(match_ids: set[str], key: str) -> dict[str, tuple[int, int]]:
     from .providers import ApiFootballProvider, FileCache
     provider = ApiFootballProvider(key, cache=FileCache())

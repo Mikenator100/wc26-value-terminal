@@ -8,7 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datalayer.snapshots import (  # noqa: E402
     score_matrix, result_probs, total_over_prob, btts_prob, snapshot_feed,
 )
-from datalayer.backtest import evaluate  # noqa: E402
+from datalayer.backtest import evaluate, pick_paper_bets  # noqa: E402
+from datalayer.settler import resolve_outcome  # noqa: E402
 
 
 def test_matrix():
@@ -19,6 +20,19 @@ def test_matrix():
     assert 0 < total_over_prob(m, 2.5) < 1
     assert btts_prob(m) < 0.5                        # weak away attack
     print(f"matrix ok (home {rp['home']:.3f}, over2.5 {total_over_prob(m, 2.5):.3f})")
+
+
+def test_dixon_coles():
+    import math
+    lh, la = 1.3, 1.1
+    m = score_matrix(lh, la)
+    # independent-Poisson draw probability, computed analytically here
+    pois = lambda k, lam: math.exp(-lam) * lam ** k / math.factorial(k)
+    indep_draw = sum(pois(k, lh) * pois(k, la) for k in range(11))
+    dc_draw = result_probs(m)["draw"]
+    assert dc_draw > indep_draw          # rho < 0 adds mass to 0-0 and 1-1
+    assert m[0][1] < pois(0, lh) * pois(1, la)  # and removes it from 0-1
+    print(f"dixon-coles ok (draw {dc_draw:.4f} > independent {indep_draw:.4f})")
 
 
 def _feed_match(b365_home=2.6, pin_home=2.5):
@@ -76,6 +90,25 @@ def test_evaluate():
     print(f"evaluate ok (bets {rep['bets']}, pnl {rep['pnl']}, clv {home_bet['clv']:.3f})")
 
 
+def test_paper_picks_settleable():
+    rows = snapshot_feed([_feed_match(b365_home=2.6, pin_home=2.5)], ts=1.0)
+    picks = pick_paper_bets(rows, weight=0.3, threshold=0.02)
+    assert picks, "the generous home price should qualify"
+    # every market name the paper trader writes must be one the settler
+    # resolves — otherwise paper bets sit open forever
+    result = {"home_goals": 2, "away_goals": 0,
+              "home_team": "Strongland", "away_team": "Weakia", "scorers": []}
+    for p in picks:
+        outcome = resolve_outcome(p["market"], p["selection"], result)
+        assert outcome in ("won", "lost"), (p["market"], p["selection"])
+    home = next(p for p in picks if p["selection"] == "Strongland")
+    assert resolve_outcome(home["market"], home["selection"], result) == "won"
+    assert home["price"] == 2.6 and 0 < home["model_prob"] < 1
+    # a tighter threshold filters everything
+    assert pick_paper_bets(rows, threshold=5.0) == []
+    print(f"paper picks ok ({len(picks)} picks, all settleable)")
+
+
 def test_push():
     feed = _feed_match()
     feed["markets"][1]["outcomes"][0]["label"] = "Over 3"   # whole-goal line
@@ -89,7 +122,9 @@ def test_push():
 
 if __name__ == "__main__":
     test_matrix()
+    test_dixon_coles()
     test_snapshot_rows()
     test_evaluate()
+    test_paper_picks_settleable()
     test_push()
     print("\nALL BACKTEST TESTS PASSED\n")

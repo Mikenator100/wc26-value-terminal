@@ -62,19 +62,31 @@ function teamMost(distH, distA) {
   return { home, away: 1 - home - tie, tie };
 }
 
+// Dixon-Coles low-score correction: independent Poisson misprices draws and
+// low-scoring games; tau reweights the 0-0/1-0/0-1/1-1 cells (rho < 0 adds
+// mass to 0-0 and 1-1). Mirrors the Python engine in datalayer/snapshots.py.
+const DC_RHO = -0.13;
+function dcTau(i, j, lh, la, rho = DC_RHO) {
+  if (i === 0 && j === 0) return 1 - lh * la * rho;
+  if (i === 0 && j === 1) return 1 + lh * rho;
+  if (i === 1 && j === 0) return 1 + la * rho;
+  if (i === 1 && j === 1) return 1 - rho;
+  return 1;
+}
+
 function scoreMatrix(lh, la, n = 8) {
   const m = [];
   let total = 0;
   for (let i = 0; i <= n; i++) {
     m[i] = [];
     for (let j = 0; j <= n; j++) {
-      const p = poisson(i, lh) * poisson(j, la);
+      const p = poisson(i, lh) * poisson(j, la) * dcTau(i, j, lh, la);
       m[i][j] = p;
       total += p;
     }
   }
   for (let i = 0; i <= n; i++)
-    for (let j = 0; j <= n; j++) m[i][j] /= total; // renormalise tail
+    for (let j = 0; j <= n; j++) m[i][j] /= total; // renormalise tail + tau
   return m;
 }
 
@@ -158,6 +170,16 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
   const confirmed = lineupStatus === "confirmed";
   const startProb = confirmed ? (p.confirmedIn ? 1 : 0) : p.startProb;
   const pos = confirmed ? p.confirmedPos || p.predictedPos : p.predictedPos;
+
+  // shrink the club/country blend toward the better-sampled source (mirrors
+  // the Python engine): the slider states a preference, the data earns its
+  // say — 300 international minutes can't outvote 3000 club minutes
+  if (p._minutes) {
+    const conf = (m) => (m ? m / (m + 540) : 0);
+    const wc = countryWeight * conf(p._minutes.country);
+    const wk = (1 - countryWeight) * conf(p._minutes.club);
+    if (wc + wk > 0) countryWeight = wc / (wc + wk);
+  }
   const posChanged =
     confirmed && p.confirmedPos && p.confirmedPos !== p.predictedPos;
 
@@ -251,7 +273,11 @@ function priceProps(p, countryWeight, lineupStatus, ctx = {}) {
       mk("To be booked", cardP),
     ];
   }
-  return { startProb, pos, posChanged, inXI: startProb > 0, pen: !!p.pen, fk: !!p.fk, props };
+  return {
+    startProb, pos, posChanged, inXI: startProb > 0, pen: !!p.pen, fk: !!p.fk, props,
+    // expected counts, exposed for the SGM builder's conditional repricing
+    exp: { goals: expGoals, sot: expSot, shots: expShots },
+  };
 }
 
 /* ---------- sample feed (replace with adapter) ---------- */
@@ -498,37 +524,59 @@ function analyseMarkets(match, matrix, modelWeight) {
 }
 
 /* ---------- analyse a same-game multi ---------- */
-function analyseSGM(legIds, match, matrix) {
-  if (legIds.length < 2) return null;
-  const legs = legIds.map((id) => ({ id, ...LEGS[id] }));
+// conditional goal environment: how each side's expected goals shift once the
+// selected matrix legs are assumed true (e.g. Over 2.5 lifts both attacks)
+function conditionalGoalFactors(matrix, preds) {
+  let mass = 0, eh = 0, ea = 0, uh = 0, ua = 0;
+  for (let i = 0; i < matrix.length; i++)
+    for (let j = 0; j < matrix.length; j++) {
+      const p = matrix[i][j];
+      uh += i * p; ua += j * p;
+      if (preds.every((f) => f(i, j))) { mass += p; eh += i * p; ea += j * p; }
+    }
+  if (mass <= 0 || !uh || !ua) return { fH: 1, fA: 1 };
+  return { fH: eh / mass / uh, fA: ea / mass / ua };
+}
 
-  // hit rate = joint probability (correlation captured by the matrix)
-  const jointProb = probOf(matrix, (i, j) =>
-    legs.every((l) => l.pred(i, j))
-  );
+function analyseSGM(legIds, match, matrix, playerLegs = {}) {
+  if (legIds.length < 2) return null;
+  const matrixLegs = legIds.filter((id) => LEGS[id]).map((id) => ({ id, ...LEGS[id] }));
+  const pLegs = legIds.filter((id) => playerLegs[id]).map((id) => ({ id, ...playerLegs[id] }));
+  if (matrixLegs.length + pLegs.length < 2) return null;
+  const preds = matrixLegs.map((l) => l.pred);
+
+  // matrix legs jointly, exactly from the score matrix; player legs repriced
+  // in the goal environment those legs imply, then multiplied in (conditional
+  // independence given the environment — an approximation, flagged in the UI)
+  const jointMatrix = preds.length ? probOf(matrix, (i, j) => preds.every((f) => f(i, j))) : 1;
+  const { fH, fA } = conditionalGoalFactors(matrix, preds);
+  const playerJoint = pLegs.reduce((a, l) => a * l.prob(l.isHome ? fH : fA), 1);
+  const jointProb = jointMatrix * playerJoint;
 
   // independent product of model marginals (for correlation comparison)
-  const marginals = legs.map((l) => probOf(matrix, l.pred));
+  const marginals = [
+    ...matrixLegs.map((l) => probOf(matrix, l.pred)),
+    ...pLegs.map((l) => l.prob(1)),
+  ];
   const indepProb = marginals.reduce((a, b) => a * b, 1);
 
   // estimate the book SGM price from leg prices + correlation scaling
-  const legBookOdds = legs.map((l) => {
-    const real = legBet365Odds(l.id, match);
-    if (real) return real;
-    const mp = probOf(matrix, l.pred);
-    return 1 / mp / 1.06; // synthetic 6% margin for unpriced legs
-  });
+  const legBookOdds = [
+    ...matrixLegs.map((l) => legBet365Odds(l.id, match) ?? 1 / probOf(matrix, l.pred) / 1.06),
+    ...pLegs.map((l) => l.book ?? 1 / l.prob(1) / 1.08), // props carry more margin
+  ];
   const indepBookOdds = legBookOdds.reduce((a, b) => a * b, 1);
   const estBookOdds =
     jointProb > 0 ? indepBookOdds * (indepProb / jointProb) : indepBookOdds;
 
   return {
-    legs,
+    legs: [...matrixLegs, ...pLegs],
     hitRate: jointProb,
     fairOdds: jointProb > 0 ? 1 / jointProb : Infinity,
     indepOdds: 1 / indepProb,
-    correlation: jointProb / indepProb, // >1 positive, <1 negative
+    correlation: indepProb > 0 ? jointProb / indepProb : 1, // >1 positive
     estBookOdds,
+    hasPlayerLegs: pLegs.length > 0,
   };
 }
 
@@ -816,21 +864,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
 
   // SGM builder: one leg per group
   const [picks, setPicks] = useState({});
-  const togglePick = (id) => {
-    const g = LEGS[id].group;
-    setPicks((p) => (p[g] === id ? { ...p, [g]: undefined } : { ...p, [g]: id }));
-  };
-  const pickedIds = Object.values(picks).filter(Boolean);
   const [bookOverride, setBookOverride] = useState("");
-  const sgm = useMemo(
-    () => analyseSGM(pickedIds, base, matrix),
-    [pickedIds, base, matrix]
-  );
-  const sgmBookOdds =
-    bookOverride !== "" && Number(bookOverride) > 1
-      ? Number(bookOverride)
-      : sgm?.estBookOdds;
-  const sgmEdge = sgm ? edge(sgmBookOdds, sgm.hitRate) : 0;
 
   // suggestions
   const [target, setTarget] = useState(2.0);
@@ -848,6 +882,49 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
       }),
     [base, playerCW, lineupStatus, xgHome, xgAway]
   );
+
+  // player legs for the SGM builder: top attacking starters, repriced in the
+  // goal environment of whatever matrix legs are picked (see analyseSGM)
+  const playerLegs = useMemo(() => {
+    const out = {};
+    players
+      .filter((p) => p.startProb >= 0.5 && p.pos !== "GK" && p.exp)
+      .sort((a, b) => (b.exp.goals || 0) - (a.exp.goals || 0))
+      .slice(0, 6)
+      .forEach((p) => {
+        const isHome = p.team === base.home;
+        const env = (f) => clamp(f, 0.5, 1.7);
+        [
+          ["ags", "to score", (f) => clamp(1 - Math.exp(-p.exp.goals * env(f)), 0.002, 0.998),
+           p.bookOdds?.["Anytime goalscorer"]],
+          ["sot1", "SOT 1+", (f) => clamp(atLeast(1, p.exp.sot * env(f), 6), 0.002, 0.998),
+           p.bookOdds?.["Shots on target 1+"]],
+          ["sh2", "Shots 2+", (f) => clamp(atLeast(2, p.exp.shots * env(f), 8), 0.002, 0.998),
+           p.bookOdds?.["Shots 2+"]],
+        ].forEach(([k, lbl, prob, book]) => {
+          out[`pl|${p.name}|${k}`] = {
+            group: `pl|${p.name}`, label: `${p.name} ${lbl}`, prob, book: book ?? null, isHome,
+          };
+        });
+      });
+    return out;
+  }, [players, base]);
+
+  const togglePick = (id) => {
+    const g = (LEGS[id] || playerLegs[id])?.group;
+    if (!g) return;
+    setPicks((p) => (p[g] === id ? { ...p, [g]: undefined } : { ...p, [g]: id }));
+  };
+  const pickedIds = Object.values(picks).filter(Boolean);
+  const sgm = useMemo(
+    () => analyseSGM(pickedIds, base, matrix, playerLegs),
+    [pickedIds, base, matrix, playerLegs]
+  );
+  const sgmBookOdds =
+    bookOverride !== "" && Number(bookOverride) > 1
+      ? Number(bookOverride)
+      : sgm?.estBookOdds;
+  const sgmEdge = sgm ? edge(sgmBookOdds, sgm.hitRate) : 0;
 
   // full derived market catalogue (model fair odds for every goals market)
   const catalog = useMemo(() => deriveCatalog(matrix, xgHome, xgAway, base.teamRates), [matrix, xgHome, xgAway, base]);
@@ -1108,6 +1185,25 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               ))}
             </div>
 
+            {Object.keys(playerLegs).length > 0 && (
+              <div className="vt-legpool" style={{ gridTemplateColumns: "1fr" }}>
+                <div className="vt-leggroup">
+                  <div className="vt-leggrouphd">Player props · one per player</div>
+                  <div className="vt-legchips">
+                    {Object.entries(playerLegs).map(([id, l]) => (
+                      <button
+                        key={id}
+                        className={`vt-chip ${picks[l.group] === id ? "on" : ""}`}
+                        onClick={() => togglePick(id)}
+                      >
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {!sgm ? (
               <div className="vt-empty">
                 Pick at least two legs to build a multi.
@@ -1188,6 +1284,8 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                   from the Bet365 bet slip for a true value read. Edge is
                   usually negative on multis; that's expected, which is why hit
                   rate is shown alongside.
+                  {sgm.hasPlayerLegs &&
+                    " Player legs are repriced in the goal environment the match legs imply (a scorer leg gets likelier inside an Over), then treated as independent given that environment — an approximation, honest but not exact."}
                 </p>
               </div>
             )}
@@ -1649,7 +1747,11 @@ function PnlChart({ series }) {
   );
 }
 
-function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, live = false }) {
+function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, paperRemote = null, live = false }) {
+  // headline-stats source: your real bets, or the auto-logged paper trader
+  const hasPaper = !!(paperRemote && (paperRemote.n || paperRemote.open));
+  const [book, setBook] = useState("real");
+  const showPaper = book === "paper" && hasPaper;
   // live mode: only the real ledger counts; preview mode blends in the
   // generated sample history so the dashboard renders with zero setup
   const sample = useMemo(() => (live ? [] : generateLedger()), [live]);
@@ -1673,15 +1775,16 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, live
   const recent = [...liveOpen, ...sampleOpen, ...settled.slice().reverse()].slice(0, 14);
   // headline metrics from the service when it answered (the ledger's truth,
   // including bets logged in earlier sessions); client-side maths otherwise
-  const P = remote?.profitability;
-  const stats = remote && remote.n
+  const activeRemote = showPaper ? paperRemote : remote;
+  const P = activeRemote?.profitability;
+  const stats = activeRemote && activeRemote.n
     ? [
-        { k: "Settled", v: String(remote.n) },
-        { k: "Hit rate", v: fmtPct(remote.hit_rate) },
+        { k: "Settled", v: String(activeRemote.n) },
+        { k: "Hit rate", v: fmtPct(activeRemote.hit_rate) },
         { k: "ROI / yield", v: fmtSigned(P?.roi), c: (P?.roi ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
         { k: "Avg CLV", v: fmtSigned(P?.avg_clv), c: (P?.avg_clv ?? 0) >= 0 ? "var(--val)" : "var(--neg)" },
         { k: "Positive CLV", v: fmtPct(P?.pct_positive_clv) },
-        { k: "Brier", v: remote.brier == null ? "—" : remote.brier.toFixed(3) },
+        { k: "Brier", v: activeRemote.brier == null ? "—" : activeRemote.brier.toFixed(3) },
       ]
     : [
         { k: "Settled", v: String(m.n) },
@@ -1703,10 +1806,24 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, live
             <div className="vt-sub">recommendation history · calibration · CLV</div>
           </div>
         </div>
-        <div className="vt-sub" style={{ maxWidth: 260, textAlign: "right" }}>
-          {live
-            ? `Live ledger · ${remote?.n ?? settled.length} settled, ${remote?.open ?? liveOpen.length} open`
-            : `Sample history · ${settled.length} settled bets, generated in-memory`}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {hasPaper && (
+            <div className="vt-lineuptoggle">
+              <button className={`vt-lbtn ${book === "real" ? "on" : ""}`} onClick={() => setBook("real")}>
+                My bets
+              </button>
+              <button className={`vt-lbtn ${book === "paper" ? "on" : ""}`} onClick={() => setBook("paper")}>
+                Paper trader
+              </button>
+            </div>
+          )}
+          <div className="vt-sub" style={{ maxWidth: 260, textAlign: "right" }}>
+            {showPaper
+              ? `Auto-logged paper picks · ${paperRemote.n} settled, ${paperRemote.open} open · 1u flat`
+              : live
+              ? `Live ledger · ${remote?.n ?? settled.length} settled, ${remote?.open ?? liveOpen.length} open`
+              : `Sample history · ${settled.length} settled bets, generated in-memory`}
+          </div>
         </div>
       </header>
 
@@ -1879,6 +1996,7 @@ export default function App() {
   const [matches, setMatches] = useState(SAMPLE_MATCHES);
   const [liveFeed, setLiveFeed] = useState(false);
   const [perf, setPerf] = useState(null); // /api/performance payload when live
+  const [paperPerf, setPaperPerf] = useState(null); // auto-logged paper ledger
 
   useEffect(() => {
     let dead = false;
@@ -1899,6 +2017,10 @@ export default function App() {
     fetch(`${API_BASE}/api/performance`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((p) => { if (!dead) setPerf(p); })
+      .catch(() => {});
+    fetch(`${API_BASE}/api/paper/performance`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((p) => { if (!dead) setPaperPerf(p); })
       .catch(() => {});
     return () => { dead = true; };
   }, []);
@@ -1966,7 +2088,7 @@ export default function App() {
           onLog={logBet}
         />
       ) : (
-        <PerformanceView ledger={ledger} onSettle={settleBet} remote={perf} live={liveFeed} />
+        <PerformanceView ledger={ledger} onSettle={settleBet} remote={perf} paperRemote={paperPerf} live={liveFeed} />
       )}
     </div>
   );

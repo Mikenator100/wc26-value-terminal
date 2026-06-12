@@ -111,21 +111,35 @@ exact feed JSON contract (the integration boundary between the two halves).
 
 - **Goals markets** (1X2, totals, BTTS, correct score, combos, margins, HT/FT,
   etc.) are exact sums over a **Poisson score matrix** built from each team's
-  expected goals. Every such market is derivable with no extra data.
+  expected goals, with the **Dixon-Coles low-score correction** (rho=-0.13;
+  independent Poisson misprices draws). Every such market is derivable with no
+  extra data.
+- **Form quality**: the xG fallback weights recent goals by **opponent Elo**
+  (`datalayer/elo.py`, baked June-2026 snapshot, `ELO_JSON` override) — 3-0
+  over El Salvador no longer reads like 3-0 over France.
 - **Same-game multis**: hit rate is the **joint** probability from the score matrix
-  (correlation captured exactly) — never the product of leg odds.
+  (correlation captured exactly) — never the product of leg odds. Player legs
+  (to score / SOT / shots) are repriced in the conditional goal environment the
+  match legs imply, then multiplied in (conditional independence, flagged as
+  an approximation in the UI).
 - **Count markets** (corners, cards, shots, SOT, offsides, tackles, fouls; player
   shots/SOT/tackles/fouls/passes/saves) use a **negative binomial** distribution,
   because these counts are overdispersed and Poisson underprices the tails.
-- **Player props**: blend club + country per-90 rates (kept separate on purpose),
-  rescale to the player's match position, scale by start probability.
+- **Player props**: blend club + country per-90 rates (kept separate on purpose)
+  with the blend **shrunk toward the better-sampled source** (minutes-weighted;
+  the country-weight slider states a preference, the data earns its say),
+  rescale to the player's match position, scale by **void-aware exposure**
+  (book props void on no-show, so prices are conditional on appearing).
 - **Prop accuracy**: attacking output scales with the team's match xG vs baseline
   (opponent defence is baked into xG); defensive/discipline output scales with the
   opponent's attack; `pen`/`fk` flags add set-piece contribution to the taker.
 - **Learning loop**: isotonic regression (PAV) recalibrates stated probabilities to
   realised outcomes; segment trust is driven by **CLV** (closing line value) and
   shrinks toward neutral on small samples; the recommender ranks by adjusted edge
-  and attaches an expected value (profit) to each pick.
+  and attaches an expected value (profit) to each pick. A **paper trader**
+  auto-logs every qualifying pick each feed cycle (1u flat, separate paper.db,
+  `PAPER_EDGE` threshold) so calibration accumulates settled volume without
+  staking; Track record has a My bets / Paper trader toggle.
 
 ## Decisions & conventions (the "why")
 
