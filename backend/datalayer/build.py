@@ -152,13 +152,23 @@ def build_match(
     meta = _fixture_meta(fixture)
 
     # --- recent form window (shared by count rates + the xG fallback) ---- #
+    # fetch a 10-match window in one cheap call per team: the descriptive Team
+    # Stats panel reads all of it, while the (expensive, per-fixture-stats)
+    # count rates are capped to the first `team_form` finished games below.
+    STATS_WINDOW = 10
     recent: dict[str, list[dict]] = {"home": [], "away": []}
     if team_form:
         for side, tid in (("home", meta["homeId"]), ("away", meta["awayId"])):
             try:
-                recent[side] = provider.team_recent_fixtures(tid, last=team_form)
+                recent[side] = provider.team_recent_fixtures(tid, last=max(STATS_WINDOW, team_form))
             except Exception:
                 pass
+
+    def _rate_window(side: str) -> list[dict]:
+        # only the most-recent `team_form` FINISHED fixtures hit fixture_statistics
+        fin = [f for f in recent[side]
+               if ((f.get("fixture") or {}).get("status") or {}).get("short") in FINISHED]
+        return fin[:team_form]
 
     # --- expected goals -------------------------------------------------- #
     try:
@@ -290,8 +300,8 @@ def build_match(
     rates = None
     if team_form:
         try:
-            rh = team_count_rates(provider, meta["homeId"], recent["home"])
-            ra = team_count_rates(provider, meta["awayId"], recent["away"])
+            rh = team_count_rates(provider, meta["homeId"], _rate_window("home"))
+            ra = team_count_rates(provider, meta["awayId"], _rate_window("away"))
             if rh and ra:
                 rates = {"home": rh, "away": ra}
         except Exception:

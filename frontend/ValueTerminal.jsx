@@ -1471,18 +1471,21 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
           </div>
 
           {/* head-to-head team stats */}
-          {base.teamStats && (
+          {base.teamStats && (() => {
+            const g = Math.max(base.teamStats.home?.games || 0, base.teamStats.away?.games || 0);
+            return (
             <section className="vt-best">
               <button className="cat-ghead" style={{ borderRadius: 12 }}
                 onClick={() => setShowStats((s) => !s)}>
                 <span>Team stats</span>
-                <span className="cat-gcount">last 10 games {showStats ? "−" : "+"}</span>
+                <span className="cat-gcount">last {g} game{g === 1 ? "" : "s"} {showStats ? "−" : "+"}</span>
               </button>
               {showStats && (
                 <TeamStats stats={base.teamStats} homeName={base.home} awayName={base.away} />
               )}
             </section>
-          )}
+            );
+          })()}
 
           {/* best singles */}
           <section className="vt-best">
