@@ -42,9 +42,10 @@
   },
   "markets": [                              // from odds.py; empty until odds merged
     { "key": "1x2",  "name": "Match result",
-      "outcomes": [ {"label":"Brazil","bet365":1.95,"pinnacle":1.88},
-                    {"label":"Draw","bet365":3.6,"pinnacle":3.7},
-                    {"label":"Morocco","bet365":4.5,"pinnacle":4.3} ] },
+      // bet365 = best price across AU sportsbooks; bestBook = which one
+      "outcomes": [ {"label":"Brazil","bet365":1.95,"bestBook":"sportsbet","pinnacle":1.88},
+                    {"label":"Draw","bet365":3.6,"bestBook":"pointsbetau","pinnacle":3.7},
+                    {"label":"Morocco","bet365":4.5,"bestBook":"neds","pinnacle":4.3} ] },
     { "key": "ou25", "name": "Total goals — Over/Under 2.5", "outcomes": [ "..." ] },
     { "key": "btts", "name": "Both teams to score",         "outcomes": [ "..." ] }
   ],

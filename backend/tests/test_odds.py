@@ -80,6 +80,28 @@ def test_normalize():
     print("normalize ok:", keys)
 
 
+def test_best_au_price():
+    # bet365 has Brazil 1.95; sportsbet beats it at 2.05 -> best wins + bestBook
+    ev = {k: v for k, v in MOCK_EVENT.items()}
+    ev["bookmakers"] = MOCK_EVENT["bookmakers"] + [{
+        "key": "sportsbet",
+        "markets": [{"key": "h2h", "outcomes": [
+            {"name": "Brazil", "price": 2.05},
+            {"name": "Morocco", "price": 4.20},
+            {"name": "Draw", "price": 3.55},
+        ]}],
+    }]
+    one = next(m for m in normalize_event_markets(ev) if m["key"] == "1x2")
+    brazil = one["outcomes"][0]
+    assert brazil["bet365"] == 2.05 and brazil["bestBook"] == "sportsbet"
+    # draw: bet365 3.60 still beats sportsbet 3.55 and pinnacle isn't retail
+    draw = one["outcomes"][1]
+    assert draw["bet365"] == 3.60 and draw["bestBook"] == "bet365"
+    # sharp anchor untouched
+    assert brazil["pinnacle"] == 1.88
+    print("best AU price ok (Brazil -> sportsbet 2.05, Draw -> bet365 3.60)")
+
+
 def test_sharp_fallback():
     # pinnacle missing -> should fall back to betfair for the sharp line
     ev = {
@@ -115,6 +137,7 @@ def test_merge():
 
 if __name__ == "__main__":
     test_normalize()
+    test_best_au_price()
     test_sharp_fallback()
     test_merge()
     print("\nALL ODDS TESTS PASSED")

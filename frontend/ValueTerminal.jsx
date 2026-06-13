@@ -176,6 +176,15 @@ const ROLE = {
 };
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
+// pretty names for the best-price book chip (mirrors odds.BOOK_LABELS)
+const BOOK_LABELS = {
+  bet365: "Bet365", sportsbet: "SportsBet", tab: "TAB", neds: "Neds",
+  ladbrokes_au: "Ladbrokes", pointsbetau: "PointsBet", unibet: "Unibet",
+  betfair_ex_au: "Betfair", betr_au: "Betr", topsport: "TopSport",
+  bluebet: "BlueBet", betright: "BetRight", playup: "PlayUp", dabble_au: "Dabble",
+};
+const bookLabel = (k) => BOOK_LABELS[k] || k;
+
 /* ---------- bet grading ----------
  * Edge alone misleads: +10% at odds 9 is a high-variance longshot on a
  * model-uncertain tail, +10% at 2.3 on a market-anchored total is the best
@@ -1205,7 +1214,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               <b className="vt-gradechip" style={{ color: gradeColor(o.grade) }}>{o.grade}</b>
             </div>
             <div className="vt-cardlabel">{o.label}</div>
-            <div className="vt-cardodds">{od(o.bet365)}</div>
+            <div className="vt-cardodds">
+              {od(o.bet365)}
+              {o.bestBook && <span className="vt-cardbook">{bookLabel(o.bestBook)}</span>}
+            </div>
             <div className="vt-cardrow">
               <span>Hit rate</span>
               <b>{pct(o.hitRate)}</b>
@@ -1454,7 +1466,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               <div className="vt-table">
                 <div className="vt-trow vt-trow--head">
                   <span>Outcome</span>
-                  <span className="vt-num">Bet365</span>
+                  <span className="vt-num">Best price</span>
                   <span className="vt-num">Fair</span>
                   <span className="vt-num">Hit rate</span>
                   <span className="vt-bar">chance vs price</span>
@@ -1467,7 +1479,10 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                     key={i}
                   >
                     <span className="vt-outcome">{o.label}</span>
-                    <span className="vt-num vt-b365">{od(o.bet365)}</span>
+                    <span className="vt-num vt-b365">
+                      {od(o.bet365)}
+                      {o.bestBook && <i className="vt-bookchip">{bookLabel(o.bestBook)}</i>}
+                    </span>
                     <span className="vt-num vt-fair">{od(o.fairOdds)}</span>
                     <span className="vt-num vt-hit">{pct(o.hitRate)}</span>
                     <span className="vt-bar">
@@ -2704,6 +2719,8 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-outcome{font-weight:500;font-size:14px;}
 .vt-num{text-align:right;font-size:14px;}
 .vt-b365{font-weight:600;font-size:15px;}
+.vt-bookchip{display:block;font-style:normal;font-family:'Space Grotesk',sans-serif;font-size:9px;letter-spacing:.04em;color:var(--muted);text-transform:uppercase;margin-top:1px;}
+.vt-cardbook{font-size:11px;font-weight:500;color:var(--muted);margin-left:8px;letter-spacing:.03em;}
 .vt-fair{color:var(--muted);}
 .vt-hit{color:var(--bone);}
 .vt-stake{color:var(--val);}

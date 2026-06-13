@@ -175,8 +175,10 @@ exact feed JSON contract (the integration boundary between the two halves).
 
 ## Decisions & conventions (the "why")
 
-- **"Fair odds" = sharp no-vig (Pinnacle) blended with the model.** Value = Bet365
-  price above fair. Pinnacle/Betfair are the truth proxy, not Bet365's own line.
+- **"Fair odds" = sharp no-vig (Pinnacle) blended with the model.** Value = the
+  best available AU sportsbook price above fair (the `bet365` field now carries
+  that best price; `bestBook` names the book). Pinnacle/Betfair are the truth
+  proxy, not any retail line.
   De-vigging uses the **power method** (margin lands on longshots, where books
   park it) — proportional division overstates longshot probabilities. Both
   engines (JSX `noVigProbs`, `snapshots._no_vig`) stay in sync.
@@ -198,8 +200,11 @@ exact feed JSON contract (the integration boundary between the two halves).
 
 - `API_FOOTBALL_KEY` — API-Football (league=1, season=2026). Fixtures, lineups
   (confirmed ~40 min pre-KO), results, and the **club/country player split**.
-- `THE_ODDS_API_KEY` — The Odds API. Bet365 + Pinnacle (+ Betfair fallback) for
-  h2h/totals/btts.
+- `THE_ODDS_API_KEY` — The Odds API. Regions `eu,au`: Pinnacle (sharp anchor,
+  eu) + the **best price across AU fixed-odds sportsbooks** (SportsBet/TAB/
+  Neds/Ladbrokes/PointsBet/bet365 AU/...; exchanges excluded for commission)
+  for h2h/totals/btts. Each outcome carries `bet365` (= best retail price you'd
+  actually bet) and `bestBook` (which book offers it).
 - `soccerdata` (optional, no key) — FBref/SofaScore/FotMob enrichment. FBref is the
   per-90 backbone; SofaScore/FotMob hit internal endpoints (ToS-grey, fragile).
 
