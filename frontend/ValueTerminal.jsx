@@ -2176,11 +2176,27 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, pape
   // generated sample history so the dashboard renders with zero setup
   const sample = useMemo(() => (live ? [] : generateLedger()), [live]);
   const liveSettled = ledger.filter((b) => b.status !== "open");
-  const settled = useMemo(
-    () => [...sample.filter((b) => b.status !== "open"), ...liveSettled],
-    [sample, liveSettled]
-  );
   const liveOpen = ledger.filter((b) => b.status === "open");
+
+  // a server settled row -> the client bet shape the dashboard fns expect
+  const mapRemote = (b) => ({
+    fixture: b.fixture || b.match_id, market: b.market,
+    selection: `${b.market} — ${b.selection}`, modelProb: b.model_prob,
+    price: b.price, closing: b.closing_price, pnl: b.pnl,
+    stake: b.stake ?? 1, status: b.status,
+  });
+
+  // the active book's settled history (oldest-first) so the charts, segment
+  // trust and recommendation table render from real rows in every mode:
+  //   paper        -> the paper ledger's settled_bets from the service
+  //   my bets/live -> the hydrated ledger (already carries settled rows)
+  //   preview      -> the generated sample
+  const settled = useMemo(() => {
+    if (showPaper) return (paperRemote?.settled_bets || []).map(mapRemote).reverse();
+    if (live) return liveSettled;
+    return sample.filter((b) => b.status !== "open");
+  }, [showPaper, paperRemote, live, liveSettled, sample]);
+
   const m = useMemo(() => perfMetrics(settled), [settled]);
   const cal = useMemo(() => fitCalibrator(settled), [settled]);
   const trust = useMemo(() => segmentTrust(settled), [settled]);
@@ -2190,9 +2206,10 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, pape
   }, [settled]);
 
   const sampleOpen = sample.filter((b) => b.status === "open");
-  // open bets first, then every settled bet newest-first (settled already
-  // contains liveSettled — don't list them twice)
-  const recent = [...liveOpen, ...sampleOpen, ...settled.slice().reverse()].slice(0, 14);
+  // open bets first, then every settled bet newest-first
+  const recent = showPaper
+    ? settled.slice().reverse().slice(0, 14)
+    : [...liveOpen, ...sampleOpen, ...settled.slice().reverse()].slice(0, 14);
   // headline metrics from the service when it answered (the ledger's truth,
   // including bets logged in earlier sessions); client-side maths otherwise
   const activeRemote = showPaper ? paperRemote : remote;

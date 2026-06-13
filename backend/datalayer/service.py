@@ -129,6 +129,13 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
         settled = led.settled()
         m = performance(settled)
         cal = fit_calibrator(settled)
+        names = _fixture_names()
+        ts = lambda b: b.get("settled_ts") or b.get("ts") or 0
+        # cumulative P&L in settled order (oldest -> newest), for the chart
+        pnl_series, run = [], 0.0
+        for b in sorted(settled, key=ts):
+            run += b.get("pnl") or 0
+            pnl_series.append(round(run, 2))
         return {
             # profitability is reported first and on equal footing with hit rate
             "profitability": {
@@ -150,9 +157,21 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
             "open_bets": [
                 {**{k: b.get(k) for k in ("match_id", "market", "selection",
                                           "model_prob", "price", "stake", "ts")},
-                 "fixture": _fixture_names().get(str(b.get("match_id")), b.get("match_id"))}
+                 "fixture": names.get(str(b.get("match_id")), b.get("match_id"))}
                 for b in sorted(led.open_bets(), key=lambda b: -(b.get("ts") or 0))[:25]
             ],
+            # settled rows (newest first) for the recommendation history table,
+            # calibration curve and segment trust — the dashboard reads these
+            # in remote mode instead of the empty client-side ledger
+            "settled_bets": [
+                {"fixture": names.get(str(b.get("match_id")), b.get("match_id")),
+                 "market": b.get("market"), "selection": b.get("selection"),
+                 "model_prob": b.get("model_prob"), "price": b.get("price"),
+                 "closing_price": b.get("closing_price"), "pnl": b.get("pnl"),
+                 "stake": b.get("stake"), "status": b.get("status")}
+                for b in sorted(settled, key=ts, reverse=True)[:100]
+            ],
+            "pnl_series": pnl_series,
         }
 
     @app.get("/api/performance")
