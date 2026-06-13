@@ -178,7 +178,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // pretty names for the best-price book chip (mirrors odds.BOOK_LABELS)
 const BOOK_LABELS = {
-  bet365: "Bet365", sportsbet: "SportsBet", tab: "TAB", neds: "Neds",
+  bet365: "Bet365", sportsbet: "SportsBet", tab: "TAB", tabtouch: "TABtouch", neds: "Neds",
   ladbrokes_au: "Ladbrokes", pointsbetau: "PointsBet", unibet: "Unibet",
   betfair_ex_au: "Betfair", betr_au: "Betr", topsport: "TopSport",
   bluebet: "BlueBet", betright: "BetRight", playup: "PlayUp", dabble_au: "Dabble",
@@ -823,6 +823,70 @@ function ValueBar({ fairProb, b365Implied, edge }) {
   );
 }
 
+/* ---------- head-to-head team stats panel ---------- */
+function FormPills({ results }) {
+  return (
+    <div className="ts-pills">
+      {(results || []).map((r, i) => (
+        <span key={i} className={`ts-pill ts-${r}`}>
+          {r === "W" ? "✓" : r === "L" ? "✕" : "–"}
+        </span>
+      ))}
+      {(!results || !results.length) && <span className="ts-pill ts-D">–</span>}
+    </div>
+  );
+}
+
+// one comparison row: values flank a centred label; the better team's share of
+// the bar is green, the other red, widths proportional to the two values
+function StatBar({ label, home, away, higherBetter = true, fmt = (x) => x }) {
+  const h = Number(home) || 0, a = Number(away) || 0;
+  const tot = h + a;
+  const hShare = tot > 0 ? (h / tot) * 100 : 50;
+  const homeBetter = higherBetter ? h >= a : h <= a;
+  return (
+    <div className="ts-row">
+      <span className="ts-val">{fmt(home)}</span>
+      <div className="ts-bar">
+        <div className="ts-seg" style={{ width: `${hShare}%`, background: homeBetter ? "var(--val)" : "var(--neg)" }} />
+        <div className="ts-seg" style={{ width: `${100 - hShare}%`, background: homeBetter ? "var(--neg)" : "var(--val)" }} />
+        <span className="ts-lbl">{label}</span>
+      </div>
+      <span className="ts-val">{fmt(away)}</span>
+    </div>
+  );
+}
+
+function TeamStats({ stats, homeName, awayName }) {
+  const { home, away } = stats;
+  const pctf = (x) => `${Math.round((x || 0) * 100)}%`;
+  return (
+    <div className="ts">
+      <div className="ts-teams">
+        <span>{homeName}</span><span>{awayName}</span>
+      </div>
+      <div className="ts-formrow">
+        <FormPills results={home.homeForm} />
+        <span className="ts-formlbl">Home form</span>
+        <FormPills results={away.homeForm} />
+      </div>
+      <div className="ts-formrow">
+        <FormPills results={home.awayForm} />
+        <span className="ts-formlbl">Away form</span>
+        <FormPills results={away.awayForm} />
+      </div>
+      <StatBar label="Clean sheets" home={home.cleanSheet} away={away.cleanSheet} fmt={pctf} />
+      <StatBar label="Failed to score" home={home.failedToScore} away={away.failedToScore} higherBetter={false} fmt={pctf} />
+      <StatBar label="Avg goals for" home={home.avgGoalsFor} away={away.avgGoalsFor} />
+      <StatBar label="Avg goals against" home={home.avgGoalsAgainst} away={away.avgGoalsAgainst} higherBetter={false} />
+      {home.avgCorners != null && away.avgCorners != null && (
+        <StatBar label="Avg corners" home={home.avgCorners} away={away.avgCorners} />
+      )}
+      <StatBar label="Avg booking pts" home={home.bookingPoints} away={away.bookingPoints} higherBetter={false} />
+    </div>
+  );
+}
+
 /* ================================================================== */
 /* ---------- full market catalogue derived from the score matrix ---------- */
 // Every market below is an exact sum over the Poisson grid — no new data.
@@ -1045,6 +1109,8 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [modelWeight, setModelWeight] = useState(0.3);
   const [stake, setStake] = useState(100);
   const [kellyFrac, setKellyFrac] = useState(0.25);
+  const [showStats, setShowStats] = useState(true);
+  const [oddsOpen, setOddsOpen] = useState(null); // "marketKey|label" -> dropdown
 
   const base = matches.find((m) => m.id === activeId) || matches[0];
   // editable xG (keyed by match so switching keeps its own values)
@@ -1404,6 +1470,20 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
             </div>
           </div>
 
+          {/* head-to-head team stats */}
+          {base.teamStats && (
+            <section className="vt-best">
+              <button className="cat-ghead" style={{ borderRadius: 12 }}
+                onClick={() => setShowStats((s) => !s)}>
+                <span>Team stats</span>
+                <span className="cat-gcount">last 10 games {showStats ? "−" : "+"}</span>
+              </button>
+              {showStats && (
+                <TeamStats stats={base.teamStats} homeName={base.home} awayName={base.away} />
+              )}
+            </section>
+          )}
+
           {/* best singles */}
           <section className="vt-best">
             <div className="vt-besthead">
@@ -1479,9 +1559,29 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                     key={i}
                   >
                     <span className="vt-outcome">{o.label}</span>
-                    <span className="vt-num vt-b365">
-                      {od(o.bet365)}
-                      {o.bestBook && <i className="vt-bookchip">{bookLabel(o.bestBook)}</i>}
+                    <span className="vt-num vt-b365 vt-oddscell">
+                      {o.books?.length > 1 ? (
+                        <button className="vt-oddsbtn"
+                          onClick={() => setOddsOpen(oddsOpen === `${m.key}|${o.label}` ? null : `${m.key}|${o.label}`)}>
+                          {od(o.bet365)}
+                          {o.bestBook && <i className="vt-bookchip">{bookLabel(o.bestBook)} ▾</i>}
+                        </button>
+                      ) : (
+                        <>
+                          {od(o.bet365)}
+                          {o.bestBook && <i className="vt-bookchip">{bookLabel(o.bestBook)}</i>}
+                        </>
+                      )}
+                      {oddsOpen === `${m.key}|${o.label}` && o.books?.length > 0 && (
+                        <div className="vt-oddspop">
+                          {o.books.map((bk, bi) => (
+                            <div className={`vt-oddsrow ${bi === 0 ? "best" : ""}`} key={bk.book}>
+                              <span>{bookLabel(bk.book)}</span>
+                              <span>{od(bk.price)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </span>
                     <span className="vt-num vt-fair">{od(o.fairOdds)}</span>
                     <span className="vt-num vt-hit">{pct(o.hitRate)}</span>
@@ -2721,6 +2821,31 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-b365{font-weight:600;font-size:15px;}
 .vt-bookchip{display:block;font-style:normal;font-family:'Space Grotesk',sans-serif;font-size:9px;letter-spacing:.04em;color:var(--muted);text-transform:uppercase;margin-top:1px;}
 .vt-cardbook{font-size:11px;font-weight:500;color:var(--muted);margin-left:8px;letter-spacing:.03em;}
+.vt-oddscell{position:relative;}
+.vt-oddsbtn{background:none;border:none;color:var(--bone);font:inherit;font-weight:600;cursor:pointer;padding:0;text-align:right;}
+.vt-oddsbtn:hover .vt-bookchip{color:var(--val);}
+.vt-oddspop{position:absolute;top:100%;right:0;z-index:20;margin-top:4px;min-width:160px;background:var(--panelHi);border:1px solid var(--line);border-radius:9px;padding:5px;box-shadow:0 8px 24px rgba(0,0,0,.45);max-height:240px;overflow:auto;}
+.vt-oddsrow{display:flex;justify-content:space-between;gap:14px;padding:5px 8px;font-size:12px;border-radius:6px;}
+.vt-oddsrow span:last-child{font-family:'JetBrains Mono',monospace;}
+.vt-oddsrow.best{color:var(--val);font-weight:600;}
+.vt-oddsrow:not(.best):nth-child(odd){background:rgba(236,231,218,.03);}
+.ts{padding:14px 4px 4px;}
+.ts-teams{display:flex;justify-content:space-between;font-weight:600;font-size:13px;color:var(--bone);margin-bottom:12px;}
+.ts-formrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;margin-bottom:10px;}
+.ts-formlbl{font-size:12px;color:var(--muted);text-align:center;white-space:nowrap;}
+.ts-pills{display:flex;gap:4px;}
+.ts-formrow .ts-pills:last-of-type{justify-content:flex-end;}
+.ts-formrow .ts-pills:first-of-type{justify-content:flex-start;}
+.ts-pill{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#0C1413;}
+.ts-pill.ts-W{background:var(--val);}
+.ts-pill.ts-L{background:var(--neg);color:#fff;}
+.ts-pill.ts-D{background:var(--muted);}
+.ts-row{display:grid;grid-template-columns:46px 1fr 46px;align-items:center;gap:10px;margin-bottom:8px;}
+.ts-val{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--bone);}
+.ts-row .ts-val:last-child{text-align:right;}
+.ts-bar{position:relative;display:flex;height:26px;border-radius:6px;overflow:hidden;}
+.ts-seg{height:100%;opacity:.55;}
+.ts-lbl{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:500;color:var(--bone);text-shadow:0 1px 2px rgba(0,0,0,.4);}
 .vt-fair{color:var(--muted);}
 .vt-hit{color:var(--bone);}
 .vt-stake{color:var(--val);}

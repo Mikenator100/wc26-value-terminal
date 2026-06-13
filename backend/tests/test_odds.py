@@ -94,12 +94,15 @@ def test_best_au_price():
     one = next(m for m in normalize_event_markets(ev) if m["key"] == "1x2")
     brazil = one["outcomes"][0]
     assert brazil["bet365"] == 2.05 and brazil["bestBook"] == "sportsbet"
+    # the comparison dropdown carries every book, sorted high-to-low
+    assert [b["book"] for b in brazil["books"]] == ["sportsbet", "bet365"]
+    assert brazil["books"][0]["price"] == 2.05 and brazil["books"][1]["price"] == 1.95
     # draw: bet365 3.60 still beats sportsbet 3.55 and pinnacle isn't retail
     draw = one["outcomes"][1]
     assert draw["bet365"] == 3.60 and draw["bestBook"] == "bet365"
     # sharp anchor untouched
     assert brazil["pinnacle"] == 1.88
-    print("best AU price ok (Brazil -> sportsbet 2.05, Draw -> bet365 3.60)")
+    print("best AU price ok (Brazil -> sportsbet 2.05, books listed for dropdown)")
 
 
 def test_sharp_fallback():

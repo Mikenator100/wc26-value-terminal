@@ -163,6 +163,33 @@ def test_build_match_team_rates():
           f"form xg {m['xgHome']}-{m['xgAway']})")
 
 
+def test_team_form_stats():
+    from datalayer.teamrates import team_form_stats
+
+    def fx(home_id, away_id, gh, ga, date):
+        return {"fixture": {"status": {"short": "FT"}, "date": date},
+                "teams": {"home": {"id": home_id}, "away": {"id": away_id}},
+                "goals": {"home": gh, "away": ga}}
+
+    # team 6: home win 2-0, home loss 0-1, away win 3-1, away draw 1-1
+    fixtures = [
+        fx(6, 9, 2, 0, "2026-06-10"),
+        fx(6, 9, 0, 1, "2026-06-07"),
+        fx(9, 6, 1, 3, "2026-06-04"),
+        fx(9, 6, 1, 1, "2026-06-01"),
+    ]
+    rates = {"corners": 5.5, "cards": 2.0, "redProb": 0.1}
+    s = team_form_stats(6, fixtures, rates)
+    assert s["form"] == ["W", "L", "W", "D"]          # newest first
+    assert s["homeForm"] == ["W", "L"] and s["awayForm"] == ["W", "D"]
+    assert s["avgGoalsFor"] == 1.5 and s["avgGoalsAgainst"] == 0.75
+    assert s["cleanSheet"] == 0.25                     # 1 of 4 (the 2-0)
+    assert s["failedToScore"] == 0.25                  # 1 of 4 (the 0-1)
+    assert s["avgCorners"] == 5.5
+    assert s["bookingPoints"] == round(10 * 2.0 + 25 * 0.1, 1)  # 22.5
+    print(f"team form stats ok ({s['form']}, CS {s['cleanSheet']}, booking {s['bookingPoints']})")
+
+
 def test_recent_player_counts():
     from datalayer.normalize import recent_player_counts
 
@@ -347,6 +374,7 @@ if __name__ == "__main__":
     test_player_count_rates()
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
+    test_team_form_stats()
     test_recent_player_counts()
     test_elo_lambdas()
     test_elo_apply_results()

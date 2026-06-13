@@ -82,6 +82,44 @@ def form_goal_averages(team_id: int, fixtures: list[dict],
     return round(gf / games, 3), round(ga / games, 3)
 
 
+def team_form_stats(team_id: int, fixtures: list[dict], rates: Optional[dict] = None,
+                    last: int = 10) -> dict:
+    """Descriptive head-to-head stats for the Team Stats panel, from recent
+    finished fixtures: W/D/L form (overall, home, away), clean-sheet and
+    failed-to-score rates, raw goals for/against. Corners + booking points
+    come from the already-computed `rates` (per-game)."""
+    fin = [f for f in (fixtures or [])
+           if ((f.get("fixture") or {}).get("status") or {}).get("short") in FINISHED
+           and (f.get("goals") or {}).get("home") is not None]
+    fin.sort(key=lambda f: (f.get("fixture") or {}).get("date") or "", reverse=True)
+    fin = fin[:last]
+
+    form, home_form, away_form = [], [], []
+    gf = ga = cs = fts = 0
+    for f in fin:
+        teams, goals = f.get("teams") or {}, f.get("goals") or {}
+        is_home = (teams.get("home") or {}).get("id") == team_id
+        mine = goals["home"] if is_home else goals["away"]
+        theirs = goals["away"] if is_home else goals["home"]
+        res = "W" if mine > theirs else "D" if mine == theirs else "L"
+        form.append(res)
+        (home_form if is_home else away_form).append(res)
+        gf += mine
+        ga += theirs
+        cs += 1 if theirs == 0 else 0
+        fts += 1 if mine == 0 else 0
+    n = len(fin) or 1
+    r = rates or {}
+    booking = round(10 * (r.get("cards") or 0) + 25 * (r.get("redProb") or 0), 1)
+    return {
+        "form": form[:5], "homeForm": home_form[:5], "awayForm": away_form[:5],
+        "cleanSheet": round(cs / n, 2), "failedToScore": round(fts / n, 2),
+        "avgGoalsFor": round(gf / n, 2), "avgGoalsAgainst": round(ga / n, 2),
+        "avgCorners": r.get("corners"), "bookingPoints": booking,
+        "games": len(fin),
+    }
+
+
 def _team_stats(payload: list[dict], team_id: int) -> Optional[dict]:
     """Extract one team's {metric: value} from a fixtures/statistics response."""
     for block in payload or []:

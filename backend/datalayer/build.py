@@ -21,7 +21,7 @@ from typing import Optional
 
 from .providers import ApiFootballProvider, FileCache, Provider
 from .normalize import build_player_profile, team_lambdas, recent_player_counts
-from .teamrates import team_rates, form_goal_averages, FINISHED
+from .teamrates import team_rates, form_goal_averages, team_form_stats, FINISHED
 from .lineups import predicted_from_recent_xis, name_key
 
 # seasons to aggregate the country split over (international samples are
@@ -306,6 +306,12 @@ def build_match(
     }
     if rates:
         out["teamRates"] = rates
+    # descriptive head-to-head stats panel (form, CS%, FTS%, goals, corners)
+    if team_form:
+        out["teamStats"] = {
+            "home": team_form_stats(meta["homeId"], recent["home"], (rates or {}).get("home")),
+            "away": team_form_stats(meta["awayId"], recent["away"], (rates or {}).get("away")),
+        }
     return out
 
 

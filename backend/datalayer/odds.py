@@ -34,7 +34,7 @@ AU_RETAIL = [
 ]
 # human labels for the book chip
 BOOK_LABELS = {
-    "bet365": "Bet365", "sportsbet": "SportsBet", "tab": "TAB", "neds": "Neds",
+    "bet365": "Bet365", "sportsbet": "SportsBet", "tab": "TAB", "tabtouch": "TABtouch", "neds": "Neds",
     "ladbrokes_au": "Ladbrokes", "pointsbetau": "PointsBet", "unibet": "Unibet",
     "betfair_ex_au": "Betfair", "betr_au": "Betr", "topsport": "TopSport",
     "bluebet": "BlueBet", "betright": "BetRight", "playup": "PlayUp",
@@ -120,9 +120,10 @@ def _price(market: Optional[dict], pred) -> Optional[float]:
     return None
 
 
-def _best_retail(event: dict, market_key: str, pred) -> tuple[Optional[float], Optional[str]]:
-    """Highest price across the AU retail books for one outcome, and the book."""
-    best_price, best_book = None, None
+def _best_retail(event: dict, market_key: str, pred) -> tuple[Optional[float], Optional[str], list]:
+    """Across the AU retail books for one outcome: the highest price, the book
+    offering it, and every book's price (sorted high-to-low) for the dropdown."""
+    prices: list[dict] = []
     for b in event.get("bookmakers", []):
         key = b.get("key")
         if key not in AU_RETAIL:
@@ -131,20 +132,24 @@ def _best_retail(event: dict, market_key: str, pred) -> tuple[Optional[float], O
             if m.get("key") != market_key:
                 continue
             p = _price(m, pred)
-            if p is not None and (best_price is None or p > best_price):
-                best_price, best_book = p, key
-    return best_price, best_book
+            if p is not None:
+                prices.append({"book": key, "price": p})
+    prices.sort(key=lambda x: -x["price"])
+    if not prices:
+        return None, None, []
+    return prices[0]["price"], prices[0]["book"], prices
 
 
 def _outcome(label: str, best: tuple, sharp: Optional[float]) -> Optional[dict]:
     # `bet365` keeps its name for back-compat but now carries the BEST retail
-    # price (the one you'd actually bet); `bestBook` says where. Sharp missing
-    # -> fall back to retail so the row still renders (fair degrades to no-vig).
-    retail, book = best
+    # price (the one you'd actually bet); `bestBook` says where; `books` is the
+    # full comparison list for the dropdown. Sharp missing -> fall back to
+    # retail so the row still renders (fair degrades to no-vig).
+    retail, book, books = best
     if retail is None and sharp is None:
         return None
     return {"label": label, "bet365": retail or sharp, "bestBook": book,
-            "pinnacle": sharp or retail}
+            "books": books, "pinnacle": sharp or retail}
 
 
 def normalize_event_markets(event: dict) -> list[dict]:
