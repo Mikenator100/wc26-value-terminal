@@ -30,8 +30,16 @@ from .lineups import predicted_from_recent_xis, name_key
 COUNTRY_SEASONS = [2024, 2025, 2026]
 
 # squad depth for matches WITHOUT a slip CSV: deep squads only pay off when
-# there are slip prices to match against
-SHALLOW_SQUAD = 12
+# there are slip prices to match against. The minutes-ordered slice keeps the
+# regulars, and the predicted XI is always added on top, so this is plenty.
+SHALLOW_SQUAD = 16
+
+
+def _entry_minutes(entry: dict) -> float:
+    """Total minutes across a team_players entry's stat blocks — used to rank
+    a roster so the squad cap keeps regulars (stars) over fringe players."""
+    return sum(((s.get("games") or {}).get("minutes") or 0)
+               for s in (entry.get("statistics") or []))
 
 # WC2026 is at neutral venues — no home advantage — except for the three host
 # nations, who really do get the crowd (~ the usual venue edge on goals)
@@ -256,27 +264,28 @@ def build_match(
             if _team_norm(team_name) not in deep_teams:
                 limit = min(squad_limit, SHALLOW_SQUAD)
         try:
-            roster = provider.team_players(team_id, season)[:limit]
+            roster_all = provider.team_players(team_id, season)
         except Exception:
-            roster = []
+            roster_all = []
+        # order by minutes so the cap keeps the regulars (the stars), not an
+        # arbitrary API slice that surfaced fringe players and three keepers
+        roster = sorted(roster_all, key=_entry_minutes, reverse=True)[:limit]
+
         pred = (predicted_lineups or {}).get(team_name) or auto_pred.get(team_name) or []
         pred_by_id = {p["id"]: p for p in pred if p.get("id")}
         pred_by_name = {name_key(p["name"]): p for p in pred}
         # when an XI is predicted, players outside it are bench material —
         # don't hand them the generic 0.7
         default_sp = 0.25 if pred else 0.7
+        built_ids: set = set()
 
-        for entry in roster:
-            pid = entry.get("player", {}).get("id")
-            pname = entry.get("player", {}).get("name")
-            if not pid or not pname:
-                continue
+        def _add(pid, pname, pinfo):
+            if not pid or not pname or pid in built_ids:
+                return
             try:
                 blocks = provider.player_seasons(pid, COUNTRY_SEASONS)
             except Exception:
-                continue
-
-            pinfo = pred_by_id.get(pid) or pred_by_name.get(name_key(pname), {})
+                return
             profile = build_player_profile(
                 player_name=pname,
                 national_team_name=team_name,
@@ -285,16 +294,24 @@ def build_match(
                 predicted_start_prob=pinfo.get("startProb", default_sp),
             )
             if not profile:
-                continue
+                return
             profile["last5"] = recent_counts.get(pid, [])[:5]  # newest first
-
-            # overlay confirmed XI when present
             if pname in confirmed:
                 profile["confirmedIn"] = True
                 profile["startProb"] = 1.0
-                # keep a role inferred from confirmed slot if it differs
                 profile["confirmedPos"] = profile["predictedPos"]
             players.append(profile)
+            built_ids.add(pid)
+
+        for entry in roster:
+            p = entry.get("player", {})
+            pid, pname = p.get("id"), p.get("name")
+            _add(pid, pname, pred_by_id.get(pid) or pred_by_name.get(name_key(pname or ""), {}))
+
+        # the predicted XI is who actually matters — always include those
+        # starters even if they fell outside the minutes-capped roster slice
+        for pinfo in pred:
+            _add(pinfo.get("id"), pinfo.get("name"), pinfo)
 
     # --- team count rates (corners / cards / shots ...) ------------------- #
     rates = None
