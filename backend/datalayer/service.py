@@ -178,14 +178,27 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
     def perf():
         return jsonify(_perf_payload(ledger))
 
+    def _paper_db() -> str:
+        return os.environ.get(
+            "PAPER_DB", os.path.join(os.path.dirname(feed_path) or ".", "paper.db"))
+
     @app.get("/api/paper/performance")
     def paper_perf():
         # the auto-logged paper ledger, written by the jobs loop
-        paper_db = os.environ.get(
-            "PAPER_DB", os.path.join(os.path.dirname(feed_path) or ".", "paper.db"))
+        paper_db = _paper_db()
         if not os.path.exists(paper_db):
             return jsonify({"n": 0, "open": 0})
         return jsonify(_perf_payload(Ledger(paper_db)))
+
+    @app.post("/api/paper/prune")
+    def paper_prune():
+        # one-off cleanup of legacy longshot junk (also runs each feed cycle)
+        paper_db = _paper_db()
+        if not os.path.exists(paper_db):
+            return jsonify({"removed": 0})
+        from .backtest import MAX_ODDS, MIN_HIT
+        removed = Ledger(paper_db).prune(MAX_ODDS, MIN_HIT)
+        return jsonify({"removed": removed})
 
     return app
 

@@ -124,6 +124,18 @@ class Ledger:
             )
             self.conn.commit()
 
+    def prune(self, max_odds: float = 6.0, min_prob: float = 0.12) -> int:
+        """Delete sub-quality rows (deep longshots / tiny-probability picks)
+        the paper trader logged before the quality gates existed. Idempotent —
+        a no-op once clean. Returns the number removed."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM bets WHERE price > ? OR model_prob < ?",
+                (max_odds, min_prob),
+            )
+            self.conn.commit()
+            return cur.rowcount
+
     # -- read ------------------------------------------------------------ #
     def settled(self) -> list[dict]:
         with self._lock:

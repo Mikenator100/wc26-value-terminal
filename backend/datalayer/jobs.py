@@ -152,8 +152,12 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
     if rows and _env_int("PAPER_BETS", 1):
         try:
             from .betlog import Ledger
-            from .backtest import pick_paper_bets
+            from .backtest import pick_paper_bets, MAX_ODDS, MIN_HIT
             paper = Ledger(_paper_db_path())
+            # self-cleaning: drop legacy longshot junk logged before the gates
+            removed = paper.prune(MAX_ODDS, MIN_HIT)
+            if removed:
+                print(f"paper prune: removed {removed} sub-quality legacy bets")
             existing = {(b["match_id"], b["market"], b["selection"]) for b in paper.all()}
             logged = 0
             picks = pick_paper_bets(
