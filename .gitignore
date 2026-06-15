@@ -21,3 +21,4 @@ dist/
 
 # claude code local settings
 .claude/settings.local.json
+model_params.json

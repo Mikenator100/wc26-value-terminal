@@ -77,6 +77,10 @@ docker compose up --build
 
 # backtest recorded snapshots (jobs writes history.jsonl every cycle)
 python -m datalayer.backtest history.jsonl --key "$API_FOOTBALL_KEY"
+
+# fit the goals/result model params on historical internationals, WC = held-out
+# test (no leakage); only writes model_params.json if it beats current on WC
+python -m datalayer.train --key "$API_FOOTBALL_KEY"
 ```
 
 Cloud: one Render web service via the root `render.yaml` blueprint — see

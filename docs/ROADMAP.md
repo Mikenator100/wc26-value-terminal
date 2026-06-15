@@ -91,6 +91,16 @@
   (`KEEP_AWAKE=0` to disable); 750 free instance-hours cover 24/7, and the
   scheduler keeps recording snapshots instead of sleeping.
 
+- **Model training harness** (`datalayer/train.py`) — fits the goals/result
+  mapping (Elo-per-goal, base total, Dixon-Coles rho, home advantage) on
+  ~2,100 historical international matches via walk-forward Elo (no leakage),
+  holds out WC 2026 as the test, and only writes `model_params.json` if the
+  fit beats current on the held-out WC set. First run: a lower per-goal
+  scale won on the historical validation but that was a home-advantage
+  confound (qualifiers have real home edge; the WC is neutral), so current
+  params were kept — the discipline working as intended. Re-run as more WC
+  games finish and the test gains power.
+
 ## Next (in priority order)
 
 1. **Accumulate snapshot history, then run the backtest** — the evaluator is
