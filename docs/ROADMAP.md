@@ -92,14 +92,22 @@
   scheduler keeps recording snapshots instead of sleeping.
 
 - **Model training harness** (`datalayer/train.py`) — fits the goals/result
-  mapping (Elo-per-goal, base total, Dixon-Coles rho, home advantage) on
-  ~2,100 historical international matches via walk-forward Elo (no leakage),
-  holds out WC 2026 as the test, and only writes `model_params.json` if the
-  fit beats current on the held-out WC set. First run: a lower per-goal
-  scale won on the historical validation but that was a home-advantage
-  confound (qualifiers have real home edge; the WC is neutral), so current
-  params were kept — the discipline working as intended. Re-run as more WC
-  games finish and the test gains power.
+  mapping (Elo-per-goal, base total, Dixon-Coles rho, home advantage) via
+  walk-forward Elo (no leakage), holds out WC 2026 as the test, writes
+  `model_params.json` only if the fit beats current on that test. Trains on
+  ~6,300 internationals (2016-25) **plus all four past World Cups** (256
+  neutral-venue matches) and fits on neutral matches only, removing the
+  qualifier home-advantage confound. Conclusion across two runs: the fitted
+  params (per_goal 200, higher base total, rho 0) don't beat the current
+  ones on the held-out WC — current (per_goal 220, total 2.6, rho -0.13) is
+  well-calibrated for the neutral, draw-heavy WC domain. The "favourites
+  should be stronger" effect was mostly the home-advantage confound. Kept
+  current params; re-run as more WC games finish.
+- **Opponent-adjusted count rates** — team corners/shots/SOT/cards are
+  Elo-normalised per recent fixture (`team_count_rates`): volume racked up
+  against minnows is discounted so a weak schedule doesn't inflate form.
+- **Match prediction panel** — consolidated result / goals / corners
+  headline with model confidence %, above Team stats.
 
 ## Next (in priority order)
 

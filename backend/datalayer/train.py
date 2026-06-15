@@ -36,8 +36,12 @@ from .providers import ApiFootballProvider, FileCache
 TRAIN_LEAGUES = [(10, "Friendlies"), (5, "Nations League"), (4, "Euro"),
                  (9, "Copa America"), (32, "WCQ Europe"), (34, "WCQ S.America"),
                  (29, "WCQ Africa"), (30, "WCQ Asia"), (31, "WCQ N.America")]
-TRAIN_SEASONS = [2023, 2024, 2025]
+# deep enough that the past World Cups have real pre-tournament Elo
+TRAIN_SEASONS = list(range(2016, 2026))
 WC_LEAGUE, WC_SEASON = 1, 2026
+# past World Cups: neutral-venue tournaments — the cleanest data for fitting
+# favourite strength (no qualifier home-advantage confound)
+PAST_WCS = [2010, 2014, 2018, 2022]
 
 ELO_START = 1500.0
 ELO_K = 40.0
@@ -190,21 +194,27 @@ def main() -> None:
     provider = ApiFootballProvider(args.key, cache=FileCache())
 
     hist = collect(provider, TRAIN_LEAGUES, TRAIN_SEASONS)
+    past_wc = collect(provider, [(WC_LEAGUE, "World Cup")], PAST_WCS)
     wc = collect(provider, [(WC_LEAGUE, "World Cup")], [WC_SEASON])
-    print(f"history: {len(hist)} matches | WC test: {len(wc)} matches")
+    print(f"history: {len(hist)} | past WCs: {len(past_wc)} | WC2026 test: {len(wc)}")
 
-    # walk-forward Elo over EVERYTHING in date order (history then WC), so WC
-    # ratings come only from prior results — no leakage
-    allm = sorted(hist + wc, key=lambda r: r["date"])
+    # walk-forward Elo over EVERYTHING in date order, so each match's ratings
+    # come only from prior results — no leakage, past WCs included
+    allm = sorted(hist + past_wc + wc, key=lambda r: r["date"])
     walk_forward_elo(allm)
     wc_ids = {id(m) for m in wc}
-    hist = [m for m in allm if id(m) not in wc_ids]
-    wc = [m for m in allm if id(m) in wc_ids]
 
-    # time-split history: train earlier, validate later (no WC in either)
-    cut = int(len(hist) * 0.8)
-    train, val = hist[:cut], hist[cut:]
-    print(f"train {len(train)} | val {len(val)} | test(WC) {len(wc)}")
+    # fit on NEUTRAL matches only (past WCs + Euros + Copas + friendlies),
+    # excluding WC2026 — neutral venues remove the home-advantage confound
+    # that made the qualifier-heavy fit want artificially strong favourites
+    past_wc_ids = {id(m) for m in past_wc}
+    neutral = [m for m in allm if m["neutral"] and id(m) not in wc_ids]
+    wc = [m for m in allm if id(m) in wc_ids]
+    cut = int(len(neutral) * 0.85)
+    train, val = neutral[:cut], neutral[cut:]
+    n_pw = sum(1 for m in neutral if id(m) in past_wc_ids)
+    print(f"neutral fit pool {len(neutral)} (incl {n_pw} past-WC) | "
+          f"train {len(train)} | val {len(val)} | test WC2026 {len(wc)}")
 
     fitted = fit(train, val)
     print("\nfitted params:", {k: round(v, 3) for k, v in fitted.items()})
