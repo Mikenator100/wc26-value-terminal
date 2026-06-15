@@ -117,6 +117,29 @@ def test_implied_lambdas_roundtrip():
     print(f"implied lambdas ok (true {true_lh}/{true_la} -> fitted {fit[0]}/{fit[1]})")
 
 
+def test_implied_lambdas_anomalous_total():
+    from datalayer.snapshots import implied_lambdas
+    # a heavy favourite with an ANOMALOUS totals line (4.25) — a thin
+    # future-fixture market. The fit must ignore the bad line and keep a sane
+    # total instead of blowing out to ~4.6 goals.
+    juice = lambda p: round(1 / (p * 1.04), 3)
+    markets = [
+        {"key": "1x2", "outcomes": [
+            {"label": "Home", "pinnacle": juice(0.76)},
+            {"label": "Draw", "pinnacle": juice(0.19)},
+            {"label": "Away", "pinnacle": juice(0.05)},
+        ]},
+        {"key": "ou25", "outcomes": [
+            {"label": "Over 4.25", "pinnacle": 1.95},
+            {"label": "Under 4.25", "pinnacle": 1.95},
+        ]},
+    ]
+    lh, la = implied_lambdas(markets)
+    assert lh + la < 3.5, (lh, la)        # sane total, not 4.6
+    assert lh > la                         # heavy favourite preserved
+    print(f"anomalous total ignored ok (total {lh + la:.2f})")
+
+
 def test_power_devig():
     from datalayer.snapshots import _no_vig
     # 1.50 / 4.20 / 7.00 with ~5% margin: the power method should strip more
@@ -193,6 +216,7 @@ if __name__ == "__main__":
     test_snapshot_rows()
     test_evaluate()
     test_implied_lambdas_roundtrip()
+    test_implied_lambdas_anomalous_total()
     test_power_devig()
     test_paper_picks_settleable()
     test_paper_quality_gates()

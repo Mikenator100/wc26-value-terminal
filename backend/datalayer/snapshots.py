@@ -112,10 +112,18 @@ def implied_lambdas(markets: list[dict]) -> Optional[tuple[float, float]]:
             target_1x2 = sharp
         elif mk.get("key") == "ou25" and len(outs) == 2 and all(sharp):
             line = _parse_line(outs[0].get("label", ""))
-            if line is not None:
+            # only trust a totals line near the goal range — thin future-fixture
+            # markets sometimes post anomalous lines (e.g. 4.25) that, fitted
+            # literally, blow the implied total out to 4.6 goals
+            if line is not None and 1.5 <= line <= 3.75:
                 target_ou = (line, sharp[0])
     if not target_1x2:
         return None
+
+    # 1X2 alone under-constrains the TOTAL (it mostly fixes the supremacy), so
+    # without a usable totals line, softly anchor the total to the competition
+    # average rather than letting the search drift to a high-scoring solution
+    PRIOR_TOTAL = 2.7
 
     def loss(lh: float, la: float) -> float:
         m = score_matrix(lh, la)
@@ -125,7 +133,9 @@ def implied_lambdas(markets: list[dict]) -> Optional[tuple[float, float]]:
                + (rp["away"] - target_1x2[2]) ** 2)
         if target_ou:
             line, p_over = target_ou
-            err += (total_over_prob(m, line) - p_over) ** 2
+            err += 2.0 * (total_over_prob(m, line) - p_over) ** 2  # trust a sane line
+        else:
+            err += 0.01 * ((lh + la) - PRIOR_TOTAL) ** 2           # soft total anchor
         return err
 
     # coarse-to-fine grid search; the matrix is cheap and this needs no deps
