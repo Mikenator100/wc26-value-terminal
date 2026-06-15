@@ -711,16 +711,26 @@ function analyseSGM(legIds, match, matrix, playerLegs = {}) {
   ];
   const indepProb = marginals.reduce((a, b) => a * b, 1);
 
-  // estimate the book SGM price from leg prices + correlation scaling.
-  // synthetic leg prices floor at 1.02: 1/p/margin dips below 1.0 for
-  // near-certain legs, which is not a price any book would write
-  const legBookOdds = [
-    ...matrixLegs.map((l) => Math.max(1.02, legBet365Odds(l.id, match) ?? 1 / probOf(matrix, l.pred) / 1.06)),
-    ...pLegs.map((l) => Math.max(1.02, l.book ?? 1 / l.prob(1) / 1.08)), // props carry more margin
+  // edge from REAL obtainable leg prices only. A parlay's value compounds its
+  // legs' single edges: edge = Π(1 + leg_edge) - 1. Legs with no obtainable
+  // price (the feed has no single for them) contribute neutrally (factor 1,
+  // edge unknown) instead of a synthetic margin — that flat margin was making
+  // every suggestion read a meaningless uniform -11%.
+  const legReal = [
+    ...matrixLegs.map((l) => legBet365Odds(l.id, match)),
+    ...pLegs.map((l) => (l.book && l.book > 1 ? l.book : null)),
   ];
-  const indepBookOdds = legBookOdds.reduce((a, b) => a * b, 1);
-  const estBookOdds =
-    jointProb > 0 ? indepBookOdds * (indepProb / jointProb) : indepBookOdds;
+  const legProb = [
+    ...matrixLegs.map((l) => probOf(matrix, l.pred)),
+    ...pLegs.map((l) => l.prob(1)),
+  ];
+  let valueFactor = 1, priced = 0;
+  legReal.forEach((rp, i) => {
+    if (rp && rp > 1 && legProb[i] > 0) { valueFactor *= rp * legProb[i]; priced++; }
+  });
+  const edgeVal = priced ? valueFactor - 1 : null; // null = nothing priced yet
+  // displayed estimate: the fair parlay shortened/raised by the known edge
+  const estBookOdds = jointProb > 0 ? (1 + (edgeVal || 0)) / jointProb : Infinity;
 
   return {
     legs: [...matrixLegs, ...pLegs],
@@ -729,6 +739,8 @@ function analyseSGM(legIds, match, matrix, playerLegs = {}) {
     indepOdds: 1 / indepProb,
     correlation: indepProb > 0 ? jointProb / indepProb : 1, // >1 positive
     estBookOdds,
+    edge: edgeVal,          // null when no leg has a real price
+    pricedLegs: priced,
     hasPlayerLegs: pLegs.length > 0,
     structureWarning: sgmStructure(matrixLegs, matrix),
   };
@@ -748,12 +760,41 @@ const SUGGEST_POOL = [
   "away_cs",
 ];
 
-function suggestSGMs(match, matrix, targetCenter) {
-  const ids = SUGGEST_POOL;
+// leg id -> its blended single edge (model + sharp), from the analysed
+// markets, so a combo's edge compounds the SAME edges the singles table shows
+// — not the raw model-vs-price gap that can balloon on unfitted lines
+const LEG_TO_MARKET = {
+  "1x2": ["result_home", "result_draw", "result_away"],
+  ou25: ["over25", "under25"],
+  btts: ["btts_yes", "btts_no"],
+};
+function singleEdgeMap(analysedMarkets) {
+  const out = {};
+  (analysedMarkets || []).forEach((m) => {
+    const ids = LEG_TO_MARKET[m.key];
+    if (ids) m.outcomes.forEach((o, i) => { if (ids[i]) out[ids[i]] = o.edge; });
+  });
+  return out;
+}
+
+function suggestSGMs(match, matrix, targetCenter, playerLegs = {}, singleEdges = {}) {
+  // candidate legs: the goal-market pool + the strongest player legs (one
+  // group per player so a combo never stacks two legs of the same man — the
+  // conditional-independence approximation only holds across players)
+  const legMeta = {};
+  SUGGEST_POOL.forEach((id) => { legMeta[id] = { group: LEGS[id].group, label: LEGS[id].label, player: false }; });
+  Object.entries(playerLegs)
+    .filter(([, l]) => l.prob(1) >= 0.2)               // skip no-hope longshots
+    .sort((a, b) => b[1].prob(1) - a[1].prob(1))
+    .slice(0, 6)
+    .forEach(([id, l]) => { legMeta[id] = { group: l.group, label: l.label, player: true }; });
+
+  const ids = Object.keys(legMeta);
   const combos = [];
   const pushIfValid = (arr) => {
-    const groups = arr.map((id) => LEGS[id].group);
-    if (new Set(groups).size !== groups.length) return; // one per group
+    const groups = arr.map((id) => legMeta[id].group);
+    if (new Set(groups).size !== groups.length) return;           // one per group
+    if (arr.filter((id) => legMeta[id].player).length > 1) return; // ≤1 player leg
     combos.push(arr);
   };
   for (let a = 0; a < ids.length; a++)
@@ -763,33 +804,53 @@ function suggestSGMs(match, matrix, targetCenter) {
         pushIfValid([ids[a], ids[b], ids[c]]);
     }
 
+  // combo edge = compound the legs' single edges (goal legs: the blended
+  // model+sharp edge; player legs: book vs model prop). Unpriced legs are
+  // neutral. This matches the singles table instead of the raw model gap.
+  const comboEdge = (legIds) => {
+    let f = 1, priced = 0;
+    for (const id of legIds) {
+      if (legMeta[id].player) {
+        const pl = playerLegs[id];
+        if (pl?.book && pl.book > 1) { f *= pl.book * pl.prob(1); priced++; }
+      } else if (singleEdges[id] != null) {
+        f *= 1 + singleEdges[id]; priced++;
+      }
+    }
+    return priced ? f - 1 : null;
+  };
+
   const scored = combos
     .map((c) => {
-      const r = analyseSGM(c, match, matrix);
+      const r = analyseSGM(c, match, matrix, playerLegs);
+      if (!r) return null;
+      const eVal = comboEdge(c);
+      const estBook = r.hitRate > 0 ? (1 + (eVal || 0)) / r.hitRate : Infinity;
+      // confidence = the weakest leg's tier (a player leg drags it down)
+      const conf = c.some((id) => legMeta[id].player) ? SRC_CONF.player : SRC_CONF.goals;
+      const { grade, score } = betScore(estBook, r.hitRate, eVal || 0, conf);
       return {
         legIds: c,
-        labels: c.map((id) => LEGS[id].label),
+        labels: c.map((id) => legMeta[id].label),
         hitRate: r.hitRate,
         fairOdds: r.fairOdds,
-        estBookOdds: r.estBookOdds,
-        edge: edge(r.estBookOdds, r.hitRate),
+        estBookOdds: estBook,
+        edge: eVal,                 // null when no leg is priced
+        hasPlayerLegs: r.hasPlayerLegs,
+        grade, score,
         structureWarning: r.structureWarning,
       };
     })
-    // drop fake multis: redundant legs (HoD + away CS implies Under 2.5) and
-    // combos that collapse to one scoreline (HoD + away CS *is* 0-0)
-    .filter((c) => c.hitRate > 0.001 && isFinite(c.fairOdds) && !c.structureWarning);
+    .filter((c) => c && c.hitRate > 0.001 && isFinite(c.fairOdds) && !c.structureWarning);
 
   const filtered =
     targetCenter == null
       ? scored
-      : scored.filter(
-          (c) =>
-            c.fairOdds >= targetCenter * 0.82 &&
-            c.fairOdds <= targetCenter * 1.18
-        );
+      : scored.filter((c) => c.fairOdds >= targetCenter * 0.82 && c.fairOdds <= targetCenter * 1.18);
 
-  return filtered.sort((a, b) => b.hitRate - a.hitRate).slice(0, 8);
+  // rank by grade (risk-adjusted value + confidence + hit comfort), the same
+  // composite the best-bets board uses — value AND chance of hitting together
+  return filtered.sort((a, b) => b.score - a.score).slice(0, 8);
 }
 
 /* ---------- formatting ---------- */
@@ -1347,8 +1408,8 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
     return legs.sort((a, b) => b.score - a.score || b.hitRate - a.hitRate).slice(0, 6);
   }, [markets, catalog, catBook, base, players, playerBook]);
   const suggestions = useMemo(
-    () => suggestSGMs(base, matrix, target),
-    [base, matrix, target]
+    () => suggestSGMs(base, matrix, target, playerLegs, singleEdgeMap(markets)),
+    [base, matrix, target, playerLegs, markets]
   );
 
   const legGroups = ["result", "totals", "btts", "cs"];
@@ -1752,7 +1813,7 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
           <section className="vt-sgm">
             <div className="vt-mkthead">
               <span>Suggested multis near a target price</span>
-              <span className="vt-juice">ranked by hit rate</span>
+              <span className="vt-juice">graded · value + hit chance · can include a player leg</span>
             </div>
             <div className="vt-targets">
               {[
@@ -1776,10 +1837,13 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               ) : (
                 suggestions.map((s, i) => (
                   <div className="vt-sugcard" key={i}>
-                    <div className="vt-suglegs">
-                      {s.labels.map((l, k) => (
-                        <span key={k}>{l}</span>
-                      ))}
+                    <div className="vt-sughead">
+                      <div className="vt-suglegs">
+                        {s.labels.map((l, k) => (
+                          <span key={k}>{l}</span>
+                        ))}
+                      </div>
+                      <b className="vt-gradechip" style={{ color: gradeColor(s.grade) }}>{s.grade}</b>
                     </div>
                     <div className="vt-sugfoot">
                       <div>
@@ -1792,8 +1856,8 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
                       </div>
                       <div>
                         <em>Edge</em>
-                        <b style={{ color: edgeColor(s.edge) }}>
-                          {signedPct(s.edge)}
+                        <b style={{ color: s.edge == null ? "var(--muted)" : edgeColor(s.edge) }}>
+                          {s.edge == null ? "—" : signedPct(s.edge)}
                         </b>
                       </div>
                     </div>
@@ -2880,6 +2944,7 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-tbtn.on{background:var(--val);color:var(--ink);border-color:var(--val);font-weight:600;}
 .vt-suggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px;}
 .vt-sugcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;}
+.vt-sughead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
 .vt-suglegs{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;}
 .vt-suglegs span{font-size:13px;font-weight:500;}
 .vt-sugfoot{display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:10px;}
