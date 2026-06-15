@@ -132,6 +132,21 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
     os.replace(tmp, feed_path)  # atomic: the service never sees a partial feed
     print(f"wrote {len(feed)} matches -> {feed_path}")
 
+    # prediction journal: log the model's pre-match expectation for every
+    # not-yet-started match (locks at the last pre-KO cycle), to be graded
+    # against results — the model's own report card
+    try:
+        from .predictions import PredictionLog
+        plog = PredictionLog(_pred_db_path())
+        logged = 0
+        for m in feed:
+            if not m.get("live"):
+                plog.record(m); logged += 1
+        if logged:
+            print(f"predictions: logged/updated {logged} pre-match")
+    except Exception as e:
+        print(f"prediction log skipped: {e}")
+
     # record an odds/model snapshot per cycle — the backtest's data source
     # (the last snapshot before kickoff doubles as the closing line)
     rows: list[dict] = []
@@ -180,6 +195,7 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
             print(f"paper logging skipped: {e}")
 
     _settle()
+    _grade_predictions()
     return len(feed)
 
 
@@ -193,6 +209,51 @@ def _history_path() -> str:
 
 def _paper_db_path() -> str:
     return os.environ.get("PAPER_DB", os.path.join(_data_dir(), "paper.db"))
+
+
+def _pred_db_path() -> str:
+    return os.environ.get("PRED_DB", os.path.join(_data_dir(), "predictions.db"))
+
+
+def _grade_predictions() -> None:
+    """Grade finished matches against their locked pre-match predictions,
+    pulling actual corners from fixtures/statistics where available."""
+    try:
+        from .predictions import PredictionLog
+        from .teamrates import _team_stats
+        plog = PredictionLog(_pred_db_path())
+        pend = plog.pending()
+        if not pend:
+            return
+        provider = ApiFootballProvider(
+            os.environ["API_FOOTBALL_KEY"],
+            cache=FileCache(os.environ.get("CACHE_DIR", ".cache")))
+        from .settler import ApiFootballResults
+        results = ApiFootballResults(provider)
+        graded = 0
+        for r in pend:
+            mid = r["match_id"]
+            res = results.result(mid)
+            if not res or res.get("status") not in ("FT", "AET", "PEN"):
+                continue
+            corners = None
+            try:
+                payload = provider.fixture_statistics(int(mid))
+                # total corners = both teams; sum each side's Corner Kicks
+                tot = 0
+                for block in payload or []:
+                    for st in block.get("statistics", []):
+                        if st.get("type") == "Corner Kicks" and st.get("value") is not None:
+                            tot += int(st["value"])
+                corners = tot or None
+            except Exception:
+                pass
+            if plog.grade(mid, res["home_goals"], res["away_goals"], corners):
+                graded += 1
+        if graded:
+            print(f"predictions graded: {graded} (summary: {plog.summary().get('result_hit')} hit)")
+    except Exception as e:
+        print(f"prediction grading skipped: {e}")
 
 
 def _closing_lookup_from_history(history_path: str):

@@ -178,6 +178,12 @@ exact feed JSON contract (the integration boundary between the two halves).
   auto-logs every qualifying pick each feed cycle (1u flat, separate paper.db,
   `PAPER_EDGE` threshold) so calibration accumulates settled volume without
   staking; Track record has a My bets / Paper trader toggle.
+- **Prediction journal** (`predictions.py`, separate `predictions.db`): logs
+  the model's pre-match expectation per match (result probs, expected goals +
+  O/U 2.5, expected corners + line), locked at the last pre-KO cycle, then
+  **auto-grades** it against results (Brier / log-loss / hit; corners from
+  match stats). Served at `/api/predictions` — the model's report card,
+  distinct from the bet ledger and the odds snapshots.
 
 ## Decisions & conventions (the "why")
 

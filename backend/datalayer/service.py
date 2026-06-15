@@ -190,6 +190,16 @@ def create_app(db_path: str = "bets.db", feed_path: str = "feed.json",
             return jsonify({"n": 0, "open": 0})
         return jsonify(_perf_payload(Ledger(paper_db)))
 
+    @app.get("/api/predictions")
+    def predictions():
+        # the model's own report card: pre-match predictions graded vs results
+        pred_db = os.environ.get(
+            "PRED_DB", os.path.join(os.path.dirname(feed_path) or ".", "predictions.db"))
+        if not os.path.exists(pred_db):
+            return jsonify({"n": 0, "pending": 0})
+        from .predictions import PredictionLog
+        return jsonify(PredictionLog(pred_db).summary())
+
     @app.post("/api/paper/prune")
     def paper_prune():
         # one-off cleanup of legacy longshot junk (also runs each feed cycle)
