@@ -943,7 +943,10 @@ function TeamStats({ stats, homeName, awayName }) {
       {home.avgCorners != null && away.avgCorners != null && (
         <StatBar label="Avg corners" home={home.avgCorners} away={away.avgCorners} />
       )}
-      <StatBar label="Avg booking pts" home={home.bookingPoints} away={away.bookingPoints} higherBetter={false} />
+      {/* booking points need card data; hide rather than show a misleading 0 */}
+      {(home.bookingPoints > 0 || away.bookingPoints > 0) && (
+        <StatBar label="Avg booking pts" home={home.bookingPoints} away={away.bookingPoints} higherBetter={false} />
+      )}
     </div>
   );
 }
