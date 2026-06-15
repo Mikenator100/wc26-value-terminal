@@ -99,12 +99,44 @@ def evaluate(snapshots: list[dict], results: dict[str, tuple[int, int]],
 # recognises it ("result" / "goal" / "both teams to score" keywords)
 PAPER_MARKET_NAMES = {"1x2": "Match result", "ou25": "Total goals O/U", "btts": "Both teams to score"}
 
+# quality gates so the paper trader stops logging longshot junk: a tiny model
+# probability times a big price clears a flat edge threshold but is a terrible
+# bet (the market crushes it — see the hugely negative CLV).
+MAX_ODDS = 6.0       # no deep longshots
+MIN_HIT = 0.12       # need a real chance of hitting
+MIN_GRADE = 46.0     # B- on the same composite the UI grades with
+PAPER_CONF = 0.9     # main markets are market-anchored (sharp blended in)
+
+
+def bet_grade(odds: float, hit: float, edge: float, conf: float = PAPER_CONF) -> float:
+    """Composite 0-100 score (mirror of the JSX betScore): risk-adjusted edge
+    (Kelly fraction — demotes longshots), confidence, and hit comfort."""
+    kelly = edge / (odds - 1) if edge > 0 and odds > 1 else 0.0
+    c = conf
+    if hit < 0.12:
+        c *= max(0.4, min(1.0, hit / 0.12))
+    e = max(0.0, min(1.0, kelly / 0.08))
+    h = max(0.0, min(1.0, (hit - 0.2) / 0.55))
+    return 100 * (0.5 * e + 0.3 * c + 0.2 * h)
+
+
+def kelly_stake(odds: float, prob: float, frac: float = 0.25, cap: float = 3.0) -> float:
+    """Fractional-Kelly stake in units (1u ≈ 1% of bankroll), capped — so the
+    stake scales with edge and odds instead of a flat 1u on everything."""
+    if odds <= 1 or prob <= 0:
+        return 0.0
+    edge = odds * prob - 1
+    if edge <= 0:
+        return 0.0
+    k = edge / (odds - 1)
+    return round(min(cap, max(0.1, frac * k * 100)), 2)
+
 
 def pick_paper_bets(rows: list[dict], weight: float = 0.3, threshold: float = 0.03) -> list[dict]:
     """The terminal's strategy as an automatic paper trader: blend model with
-    sharp, flag every outcome whose Bet365 price clears the edge threshold.
-    Feeding these through the ledger gives the calibrator settled volume
-    without staking anything."""
+    sharp, then log only bets that clear the edge threshold AND the quality
+    gates (odds cap, min hit chance, min grade), staked by fractional Kelly.
+    Gives the calibrator honest settled volume instead of longshot noise."""
     picks = []
     for r in rows:
         mp, sp, price = r.get("model_prob"), r.get("sharp_prob"), r.get("bet365")
@@ -113,10 +145,15 @@ def pick_paper_bets(rows: list[dict], weight: float = 0.3, threshold: float = 0.
             continue
         blended = weight * mp + (1 - weight) * sp
         edge = price * blended - 1
-        if edge >= threshold:
-            picks.append({"match_id": r["match_id"], "market": name,
-                          "selection": r["label"], "model_prob": round(blended, 5),
-                          "price": price, "edge": round(edge, 4)})
+        if edge < threshold or price > MAX_ODDS or blended < MIN_HIT:
+            continue
+        grade = bet_grade(price, blended, edge)
+        if grade < MIN_GRADE:
+            continue
+        picks.append({"match_id": r["match_id"], "market": name,
+                      "selection": r["label"], "model_prob": round(blended, 5),
+                      "price": price, "edge": round(edge, 4),
+                      "stake": kelly_stake(price, blended)})
     return picks
 
 

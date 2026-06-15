@@ -150,7 +150,30 @@ def test_paper_picks_settleable():
     assert home["price"] == 2.6 and 0 < home["model_prob"] < 1
     # a tighter threshold filters everything
     assert pick_paper_bets(rows, threshold=5.0) == []
+    # stakes are fractional-Kelly, not flat 1u, and sized by the bet
+    assert all(p.get("stake", 0) > 0 for p in picks)
     print(f"paper picks ok ({len(picks)} picks, all settleable)")
+
+
+def test_paper_quality_gates():
+    from datalayer.backtest import bet_grade, kelly_stake
+
+    # a longshot with a 'flat-edge' that clears the threshold but is junk:
+    # model 3%, price 31 -> blended edge positive, but grade should reject it
+    longshot = [{"match_id": "x", "market": "1x2", "label": "Minnow",
+                 "model_prob": 0.03, "sharp_prob": 0.03, "bet365": 31.0}]
+    assert pick_paper_bets(longshot, threshold=0.02) == []   # filtered out
+
+    # a solid favourite-ish value bet passes and is staked by Kelly
+    good = [{"match_id": "y", "market": "ou25", "label": "Under 2.5",
+             "model_prob": 0.62, "sharp_prob": 0.60, "bet365": 1.85}]
+    picks = pick_paper_bets(good, threshold=0.02)
+    assert len(picks) == 1 and picks[0]["stake"] > 0
+
+    # grade demotes the longshot vs the value bet; Kelly demotes longshot stake
+    assert bet_grade(31.0, 0.03, 31 * 0.03 - 1) < bet_grade(1.85, 0.62, 1.85 * 0.62 - 1)
+    assert kelly_stake(61.0, 0.019) < kelly_stake(1.77, 0.68)
+    print(f"paper quality gates ok (good stake {picks[0]['stake']}u)")
 
 
 def test_push():
@@ -172,5 +195,6 @@ if __name__ == "__main__":
     test_implied_lambdas_roundtrip()
     test_power_devig()
     test_paper_picks_settleable()
+    test_paper_quality_gates()
     test_push()
     print("\nALL BACKTEST TESTS PASSED\n")

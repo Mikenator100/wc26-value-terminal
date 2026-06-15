@@ -167,7 +167,7 @@ def run_cycle(squad_limit: int | None = None, auto_lineups: bool | None = None) 
                     continue
                 paper.record(match_id=p["match_id"], market=p["market"],
                              selection=p["selection"], model_prob=p["model_prob"],
-                             price=p["price"], stake=1.0, bankroll=100.0)
+                             price=p["price"], stake=p.get("stake", 1.0), bankroll=100.0)
                 existing.add(key)
                 logged += 1
             if logged:

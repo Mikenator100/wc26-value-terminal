@@ -2438,7 +2438,7 @@ function PerformanceView({ ledger = [], onSettle = () => {}, remote = null, pape
           )}
           <div className="vt-sub" style={{ maxWidth: 260, textAlign: "right" }}>
             {showPaper
-              ? `Auto-logged paper picks · ${paperRemote.n} settled, ${paperRemote.open} open · 1u flat`
+              ? `Auto-logged paper picks · ${paperRemote.n} settled, ${paperRemote.open} open · ¼-Kelly stakes`
               : live
               ? `Live ledger · ${remote?.n ?? settled.length} settled, ${remote?.open ?? liveOpen.length} open`
               : `Sample history · ${settled.length} settled bets, generated in-memory`}
