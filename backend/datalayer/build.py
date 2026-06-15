@@ -33,6 +33,10 @@ COUNTRY_SEASONS = [2024, 2025, 2026]
 # there are slip prices to match against. The minutes-ordered slice keeps the
 # regulars, and the predicted XI is always added on top, so this is plenty.
 SHALLOW_SQUAD = 16
+# hard per-team cap on players built (each costs 3 API calls). The predicted
+# XI (11) + 3 bench is enough for prop coverage; slip-CSV players are added
+# separately and aren't subject to this.
+MAX_PLAYERS = 14
 
 
 def _entry_minutes(entry: dict) -> float:
@@ -277,15 +281,47 @@ def build_match(
         # when an XI is predicted, players outside it are bench material —
         # don't hand them the generic 0.7
         default_sp = 0.25 if pred else 0.7
-        built_ids: set = set()
 
-        def _add(pid, pname, pinfo):
-            if not pid or not pname or pid in built_ids:
-                return
+        # roster lookups so a predicted-XI player who's also on the roster
+        # keeps the roster's canonical name (lineups carry name variants)
+        roster_name_by_id, roster_id_by_namekey = {}, {}
+        for entry in roster:
+            p = entry.get("player", {})
+            if p.get("id"):
+                roster_name_by_id[p["id"]] = p.get("name")
+                roster_id_by_namekey[name_key(p.get("name") or "")] = p["id"]
+
+        # pick the ≤MAX_PLAYERS to build BEFORE fetching (each is 3 API calls):
+        # the predicted XI first (who actually matters), then fill from the
+        # minutes-ordered roster. Keeps the squad small but always star-led.
+        cap = min(limit, MAX_PLAYERS)
+        candidates: list[tuple] = []  # (pid, pname, pinfo)
+        seen: set = set()
+        for pinfo in pred:
+            pid = pinfo.get("id")
+            if not pid:  # name-only predicted entry: resolve to a roster id
+                pid = roster_id_by_namekey.get(name_key(pinfo.get("name") or ""))
+            if not pid or pid in seen:
+                continue
+            pname = roster_name_by_id.get(pid) or pinfo.get("name")
+            candidates.append((pid, pname, pinfo)); seen.add(pid)
+        for entry in roster:
+            if len(candidates) >= cap:
+                break
+            p = entry.get("player", {})
+            pid, pname = p.get("id"), p.get("name")
+            if pid and pid not in seen:
+                candidates.append((pid, pname,
+                                   pred_by_name.get(name_key(pname or ""), {}))); seen.add(pid)
+        candidates = candidates[:cap]
+
+        for pid, pname, pinfo in candidates:
+            if not pid or not pname:
+                continue
             try:
                 blocks = provider.player_seasons(pid, COUNTRY_SEASONS)
             except Exception:
-                return
+                continue
             profile = build_player_profile(
                 player_name=pname,
                 national_team_name=team_name,
@@ -294,24 +330,13 @@ def build_match(
                 predicted_start_prob=pinfo.get("startProb", default_sp),
             )
             if not profile:
-                return
+                continue
             profile["last5"] = recent_counts.get(pid, [])[:5]  # newest first
             if pname in confirmed:
                 profile["confirmedIn"] = True
                 profile["startProb"] = 1.0
                 profile["confirmedPos"] = profile["predictedPos"]
             players.append(profile)
-            built_ids.add(pid)
-
-        for entry in roster:
-            p = entry.get("player", {})
-            pid, pname = p.get("id"), p.get("name")
-            _add(pid, pname, pred_by_id.get(pid) or pred_by_name.get(name_key(pname or ""), {}))
-
-        # the predicted XI is who actually matters — always include those
-        # starters even if they fell outside the minutes-capped roster slice
-        for pinfo in pred:
-            _add(pinfo.get("id"), pinfo.get("name"), pinfo)
 
     # --- team count rates (corners / cards / shots ...) ------------------- #
     rates = None
