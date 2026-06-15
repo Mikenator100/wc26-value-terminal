@@ -163,6 +163,23 @@ def test_build_match_team_rates():
           f"form xg {m['xgHome']}-{m['xgAway']})")
 
 
+def test_opponent_adjusted_rates():
+    # same raw counts in two games; opponent-normalise with a weak (0.7) and a
+    # strong (1.4) opponent factor -> attacking counts deflate toward the weak
+    # game, discipline counts the other way
+    payloads = [
+        stats_payload(6, corners=8, cards=1, shots=18, sot=7, offsides=2, fouls=8),
+        stats_payload(6, corners=8, cards=1, shots=18, sot=7, offsides=2, fouls=8),
+    ]
+    raw = team_rates(6, payloads)
+    adj = team_rates(6, payloads, opp_factors=[0.7, 0.7])  # both vs minnows
+    # corners/shots earned vs minnows are discounted below the raw average
+    assert adj["corners"] < raw["corners"] and adj["shots"] < raw["shots"]
+    # fouls (discipline) divided by the weak factor -> higher than raw
+    assert adj["fouls"] > raw["fouls"]
+    print(f"opponent-adjusted rates ok (corners {raw['corners']} -> {adj['corners']} vs minnows)")
+
+
 def test_team_form_stats():
     from datalayer.teamrates import team_form_stats
 
@@ -374,6 +391,7 @@ if __name__ == "__main__":
     test_player_count_rates()
     test_expectations_use_measured_rates()
     test_build_match_team_rates()
+    test_opponent_adjusted_rates()
     test_team_form_stats()
     test_recent_player_counts()
     test_elo_lambdas()

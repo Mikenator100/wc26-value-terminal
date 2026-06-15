@@ -134,21 +134,36 @@ def _team_stats(payload: list[dict], team_id: int) -> Optional[dict]:
     return None
 
 
-def team_rates(team_id: int, stats_payloads: list[list[dict]]) -> Optional[dict]:
+# which count metrics are ATTACKING volume (inflated vs weak opponents) vs
+# DEFENSIVE/discipline (inflated vs strong opponents). Opponent-normalising
+# divides them the right way so minnow-bashing stops looking like real form.
+_ATTACK_COUNTS = {"corners", "shots", "sot", "offsides"}
+
+
+def team_rates(team_id: int, stats_payloads: list[list[dict]],
+               opp_factors: Optional[list[float]] = None) -> Optional[dict]:
     """Average a team's per-game counts over several fixtures/statistics payloads.
+
+    `opp_factors` (one per payload, an Elo goal_factor: >1 = strong opponent)
+    opponent-normalises the counts to a 'vs average side' baseline: attacking
+    volume racked up against a minnow (factor < 1) is discounted, output earned
+    against a strong side is credited up. Without it, counts are raw averages.
 
     Returns None when no payload contains the team — callers fall back to
     omitting teamRates (the terminal then skips count markets for the match).
     """
     sums: dict[str, float] = {}
     games = 0
-    for payload in stats_payloads:
+    for idx, payload in enumerate(stats_payloads):
         stats = _team_stats(payload, team_id)
         if not stats:
             continue
         games += 1
+        f = (opp_factors[idx] if opp_factors and idx < len(opp_factors) else 1.0) or 1.0
         for k, v in stats.items():
-            sums[k] = sums.get(k, 0.0) + v
+            # attacking counts ×factor (deflate vs weak); discipline ÷factor
+            adj = v * f if k in _ATTACK_COUNTS else (v / f if k in ("fouls", "cards", "red") else v)
+            sums[k] = sums.get(k, 0.0) + adj
     if not games:
         return None
 

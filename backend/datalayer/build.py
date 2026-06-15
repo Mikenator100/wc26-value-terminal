@@ -91,12 +91,16 @@ def _confirmed_lineup_index(lineups: list[dict]) -> dict[str, str]:
 
 
 def team_count_rates(provider: Provider, team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
-    """Per-game corner/card/shot rates over a team's recent finished fixtures.
+    """Per-game corner/card/shot rates over a team's recent finished fixtures,
+    opponent-normalised: counts racked up against a weak side are discounted so
+    a minnow-heavy schedule doesn't inflate a team's corner/shot/card form.
 
     Costs 1 API call per finished fixture uncached; finished-match statistics
     are cached for a month, so repeat builds are free.
     """
-    payloads = []
+    from .elo import load_table, rating, goal_factor
+    table = load_table()
+    payloads, opp_factors = [], []
     for fx in recent_fixtures:
         status = ((fx.get("fixture") or {}).get("status") or {}).get("short")
         fid = (fx.get("fixture") or {}).get("id")
@@ -106,7 +110,11 @@ def team_count_rates(provider: Provider, team_id: int, recent_fixtures: list[dic
             payloads.append(provider.fixture_statistics(int(fid)))
         except Exception:
             continue
-    return team_rates(team_id, payloads)
+        teams = fx.get("teams") or {}
+        is_home = (teams.get("home") or {}).get("id") == team_id
+        opp = ((teams.get("away") if is_home else teams.get("home")) or {}).get("name", "")
+        opp_factors.append(goal_factor(rating(opp, table)))
+    return team_rates(team_id, payloads, opp_factors=opp_factors)
 
 
 def _games_played(team_stats: dict) -> int:

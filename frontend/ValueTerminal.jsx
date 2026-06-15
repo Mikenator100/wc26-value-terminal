@@ -1288,6 +1288,39 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
   const [catBook, setCatBook] = useState({});
   const [openGroup, setOpenGroup] = useState("Result");
 
+  // consolidated match prediction: result / goals / corners, each with the
+  // model's confidence. Probabilities come from the same matrix + count model
+  // the markets use (market-informed via the fitted xG), so this is just a
+  // headline summary, not a separate model.
+  const prediction = useMemo(() => {
+    const P = (pred) => probOf(matrix, pred);
+    const res = [
+      { label: base.home, side: "Home", p: P((i, j) => i > j) },
+      { label: "Draw", side: "Draw", p: P((i, j) => i === j) },
+      { label: base.away, side: "Away", p: P((i, j) => i < j) },
+    ].sort((a, b) => b.p - a.p);
+    const bands = [
+      { label: "0–1 goals", p: P((i, j) => i + j <= 1) },
+      { label: "2–3 goals", p: P((i, j) => i + j === 2 || i + j === 3) },
+      { label: "4+ goals", p: P((i, j) => i + j >= 4) },
+    ].sort((a, b) => b.p - a.p);
+    const pOver = P((i, j) => i + j > 2.5);
+    const goals = {
+      band: bands[0], expected: xgHome + xgAway,
+      ou: pOver >= 0.5 ? { label: "Over 2.5", p: pOver } : { label: "Under 2.5", p: 1 - pOver },
+    };
+    let corners = null;
+    if (base.teamRates) {
+      const R = base.teamRates;
+      const aH = clamp(xgHome / 1.35, 0.6, 1.7), aA = clamp(xgAway / 1.35, 0.6, 1.7);
+      const lam = R.home.corners * aH + R.away.corners * aA;
+      const line = Math.floor(lam) + 0.5;
+      const over = distOver(countDist(lam, 10), line);
+      corners = { expected: lam, line, ou: over >= 0.5 ? { label: `Over ${line}`, p: over } : { label: `Under ${line}`, p: 1 - over } };
+    }
+    return { res, goals, corners };
+  }, [matrix, xgHome, xgAway, base]);
+
   // best value across EVERYTHING priced: main markets, the catalog (CSV or
   // typed prices), and player props — one ranked board
   const valuePicks = useMemo(() => {
@@ -1533,6 +1566,49 @@ function MarketsView({ matches = SAMPLE_MATCHES, feedNote = "", onLog = () => {}
               </label>
             </div>
           </div>
+
+          {/* consolidated match prediction */}
+          <section className="vt-pred">
+            <div className="vt-besthead">
+              <span>Match prediction</span>
+              <span className="vt-bestnote">model confidence · result · goals · corners</span>
+            </div>
+            <div className="vt-predgrid">
+              <div className="vt-predcard">
+                <div className="vt-predlbl">Result</div>
+                <div className="vt-predpick">{prediction.res[0].label}</div>
+                <div className="vt-predconf">{pct(prediction.res[0].p)}<i>confidence</i></div>
+                <div className="vt-predrow">
+                  {prediction.res.map((r) => (
+                    <span key={r.side}>{r.side === "Draw" ? "Draw" : r.side} {pct(r.p)}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="vt-predcard">
+                <div className="vt-predlbl">Goals</div>
+                <div className="vt-predpick">{prediction.goals.band.label}</div>
+                <div className="vt-predconf">{pct(prediction.goals.band.p)}<i>most likely</i></div>
+                <div className="vt-predrow">
+                  <span>exp {prediction.goals.expected.toFixed(1)}</span>
+                  <span>{prediction.goals.ou.label} {pct(prediction.goals.ou.p)}</span>
+                </div>
+              </div>
+              <div className="vt-predcard">
+                <div className="vt-predlbl">Corners</div>
+                {prediction.corners ? (
+                  <>
+                    <div className="vt-predpick">{prediction.corners.ou.label}</div>
+                    <div className="vt-predconf">{pct(prediction.corners.ou.p)}<i>confidence</i></div>
+                    <div className="vt-predrow">
+                      <span>exp {prediction.corners.expected.toFixed(1)} corners</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="vt-predrow" style={{ marginTop: 8 }}><span>no corner data</span></div>
+                )}
+              </div>
+            </div>
+          </section>
 
           {/* head-to-head team stats */}
           {base.teamStats && (() => {
@@ -2948,6 +3024,14 @@ input[type=range]{accent-color:var(--val);cursor:pointer;}
 .vt-suggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px;}
 .vt-sugcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;}
 .vt-sughead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+.vt-pred{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;}
+.vt-predgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:6px;}
+.vt-predcard{background:var(--panelHi);border:1px solid var(--line);border-radius:10px;padding:13px;}
+.vt-predlbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);}
+.vt-predpick{font-size:19px;font-weight:700;margin:3px 0 2px;}
+.vt-predconf{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;color:var(--val);}
+.vt-predconf i{font-style:normal;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:400;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-left:7px;}
+.vt-predrow{display:flex;flex-wrap:wrap;gap:10px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);}
 .vt-suglegs{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;}
 .vt-suglegs span{font-size:13px;font-weight:500;}
 .vt-sugfoot{display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:10px;}
