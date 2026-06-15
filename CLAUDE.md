@@ -129,10 +129,12 @@ exact feed JSON contract (the integration boundary between the two halves).
   **live**: each jobs cycle re-derives ratings from the baseline + every
   finished WC fixture (`elo.apply_results`, K=50, margin multiplier,
   idempotent, written to `ELO_STATE`)
-  (`elo.elo_lambdas`: ~220 rating points ≈ 1 goal around a 2.6-goal total)
-  tilted ±18% by Elo-weighted recent form — raw form averages are never
-  used directly, qualifier blowouts vs minnows read like 4 goals/game even
-  after discounting; (3) season stats / form averages only for unrated teams.
+  (`elo.elo_lambdas`: ~220 rating points ≈ 1 goal) — Elo sets the
+  **supremacy** (the model's stronger signal vs results) while the match
+  **total** comes from the two teams' Elo-weighted form goals shrunk toward
+  the 2.6 average (a flat total made totals/BTTS no-skill on the finished-
+  match backtest; team-specific totals beat it); (3) season stats / form
+  averages only for unrated teams.
   Pre-fit estimates are kept as `xgModelHome/Away` in the feed.
 - **Same-game multis**: hit rate is the **joint** probability from the score matrix
   (correlation captured exactly) — never the product of leg odds. Player legs

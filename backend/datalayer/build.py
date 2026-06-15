@@ -126,20 +126,6 @@ def _form_stats(team_id: int, recent_fixtures: list[dict]) -> Optional[dict]:
                       "against": {"average": {"total": fg[1]}}}}
 
 
-def _form_tilt(team_id: int, recent_fixtures: list[dict], table: dict) -> float:
-    """Gentle recent-form multiplier on the Elo anchor (~±18% at most).
-
-    Raw form averages are too noisy to set xG outright — a qualifier-blowout
-    schedule reads as 4 goals/game even after opponent discounts — so form
-    only tilts the rating-based estimate."""
-    from .elo import rating, goal_factor
-    fg = form_goal_averages(team_id, recent_fixtures,
-                            elo_factor=lambda opp: goal_factor(rating(opp, table)))
-    if not fg or fg[0] <= 0:
-        return 1.0
-    return max(0.85, min(1.18, (fg[0] / 1.3) ** 0.3))
-
-
 def build_match(
     provider: Provider,
     fixture: dict,
@@ -193,15 +179,24 @@ def build_match(
 
     if degenerate:
         # early in the tournament the league-season stats have nothing to
-        # average. The Elo matchup is the anchor (small-sample form averages
-        # are wild across uneven schedules); recent form only tilts it.
-        from .elo import load_table, rating, elo_lambdas
+        # average. Elo sets the SUPREMACY (who wins — validated as the model's
+        # stronger signal against results), while the match TOTAL comes from
+        # the two teams' Elo-weighted form goals (a flat 2.6 total made every
+        # totals/BTTS prediction no-skill; team-specific totals beat it on the
+        # finished-match backtest). The total is shrunk toward the average.
+        from .elo import load_table, rating, goal_factor, elo_lambdas, TOTAL_GOALS
         table = load_table()
         rh, ra = rating(meta["home"], table), rating(meta["away"], table)
         if rh is not None and ra is not None:
-            base_h, base_a = elo_lambdas(rh, ra, venue_mult=adv)
-            xg_home = round(base_h * _form_tilt(meta["homeId"], recent["home"], table), 3)
-            xg_away = round(base_a * _form_tilt(meta["awayId"], recent["away"], table), 3)
+            ef = lambda opp: goal_factor(rating(opp, table))
+            fh = form_goal_averages(meta["homeId"], recent["home"], elo_factor=ef)
+            fa = form_goal_averages(meta["awayId"], recent["away"], elo_factor=ef)
+            if fh and fa:
+                form_total = 0.5 * (fh[0] + fa[1]) + 0.5 * (fa[0] + fh[1])
+                total = max(1.9, min(3.8, 0.45 * TOTAL_GOALS + 0.55 * form_total))
+            else:
+                total = TOTAL_GOALS
+            xg_home, xg_away = elo_lambdas(rh, ra, venue_mult=adv, total=total)
         else:
             # unrated team: the old form-average fallback
             hs2 = _form_stats(meta["homeId"], recent["home"]) or hs
